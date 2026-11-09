@@ -90,16 +90,21 @@ C# on .NET 10 with WPF, as the PRD proposes: every feature needs Windows APIs th
 | No polling for music or agent state | Both event-driven |
 
 The island renders in software. A transparent, always-on-top WPF window on the GPU keeps a Direct3D
-device alive (~210 MB). In software it stays around 65 MB, and an expand-and-collapse costs about 0.4 CPU-s.
-Set `NEXUS_RENDER=hardware` to compare.
+device alive (~210 MB). In software it stays around 65 MB, and an expand-and-collapse costs about 0.6 CPU-s,
+including keeping the blur window under the island while it animates. Set `NEXUS_RENDER=hardware` to compare.
 
 Developer switches: `NEXUS_DEBUG=1` writes a trace to `%TEMP%\nexus-debug.log`; `NEXUS_REDUCED_MOTION=1`
 forces the reduced-motion crossfades.
 
 ## Known gaps
 
-- **No acrylic blur.** A transparent WPF window can't blur what's behind it, so the surface is a 97%
-  opaque version of the Figma fill to keep text at 4.5:1 contrast.
+- **Blur, not Windows' acrylic material.** A small native window under the island blurs the desktop and
+  the island draws a 72% tint over it, so colours behind show through like the Start menu. Windows 11's
+  own acrylic (`NEXUS_BACKDROP=acrylic`) turns flat grey for inactive windows, and the island never takes
+  focus. With transparency effects off, or `NEXUS_BACKDROP=off`, the island is nearly opaque instead.
+  Very bright backgrounds lower the contrast of secondary text; `NEXUS_TINT=CC` (hex alpha) raises the tint.
+- **Resting line is larger than the Figma spec** (112 × 10 instead of 64 × 6) with a much larger hover and
+  click area that reaches down to the taskbar, so it's easy to find and hit.
 - **Accent colour follows Windows.** With a red or orange accent, primary buttons look red, and orange is
   also the "needs you" colour. Set `"UseSystemAccent": false` for Fluent blue.
 - **Dark theme only** for now; light and high-contrast are planned.

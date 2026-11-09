@@ -42,6 +42,10 @@
     <SolidColorBrush x:Key="Brush.Control" Color="{StaticResource Color.Control}" />
     <SolidColorBrush x:Key="Brush.StrokeSurface" Color="{StaticResource Color.StrokeSurface}" />
     <SolidColorBrush x:Key="Brush.StrokeControl" Color="{StaticResource Color.StrokeControl}" />
+    <!-- The island's edge over a blurred backdrop: white at ~12%, like Windows 11 flyouts. -->
+    <SolidColorBrush x:Key="Brush.StrokeAcrylic" Color="#1FFFFFFF" />
+    <!-- Surfaces that have no blur behind them (the detached bubble) stay nearly opaque. -->
+    <SolidColorBrush x:Key="Brush.IslandOpaque" Color="#F7141414" />
     <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Color.Accent}" />
     <SolidColorBrush x:Key="Brush.AccentFill" Color="{StaticResource Color.AccentFill}" />
     <SolidColorBrush x:Key="Brush.AccentFillHover" Color="#FF0F6CBD" />

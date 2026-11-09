@@ -33,8 +33,14 @@ public sealed record Scene(SurfaceShape Shape, FrameworkElement? Content = null,
 /// </summary>
 public partial class IslandWindow : Window
 {
-    private static readonly Brush HitBrush = Freeze(new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)));
-    private static readonly Size RestingSize = new(64, 6);
+    // Alpha 2 rather than 1: invisible, but safely above zero so the layered window takes the pointer.
+    private static readonly Brush HitBrush = Freeze(new SolidColorBrush(Color.FromArgb(2, 0, 0, 0)));
+    /// <summary>
+    /// The resting line. Figma specifies 64 x 6, but a near-black 6 px line disappears against a dark
+    /// taskbar, so it is larger and carries a light outline to stay findable on any background.
+    /// </summary>
+    private static readonly Size RestingSize = new(112, 10);
+    private const double RestingRadius = 5;
 
     private IntPtr _hwnd;
     private FrameworkElement? _current;
@@ -43,7 +49,7 @@ public partial class IslandWindow : Window
     private bool _attention;
     private bool _anchorBottom = true;
     private int _visibilityToken;
-    private double _clipRadius = 3;
+    private double _clipRadius = RestingRadius;
     private int _sizeToken;
 
     /// <summary>Gap between the island and the taskbar (or the top of the screen).</summary>
@@ -53,7 +59,7 @@ public partial class IslandWindow : Window
     private const double ExtentMargin = 44;
 
     /// <summary>Current window height in DIPs; follows the island.</summary>
-    private double _extent = 6 + StageGap + ExtentMargin;
+    private double _extent = 10 + StageGap + ExtentMargin;
 
     public IslandWindow()
     {
@@ -80,6 +86,8 @@ public partial class IslandWindow : Window
         Bubble.MouseLeftButtonUp += (_, e) => { BubbleClicked?.Invoke(); e.Handled = true; };
 
         ContentClip.SizeChanged += (_, e) => UpdateClip(e.NewSize);
+        Surface.SizeChanged += (_, _) => SyncBackdrop();
+        IsVisibleChanged += (_, _) => SyncBackdrop();
         CurrentHost.ChildSizeChanged += (_, _) => RefitToContent();
 
         ApplyShape(SurfaceShape.Resting, reduced: true);
@@ -96,6 +104,70 @@ public partial class IslandWindow : Window
     public event Action? KeyboardDeactivated;
 
     public IntPtr Handle => _hwnd;
+
+    /// <summary>The blur behind the island, or null when transparency effects are off.</summary>
+    internal Backdrop.Kind BackdropKind => _backdrop?.Mode ?? Backdrop.Kind.None;
+
+    private Backdrop? _backdrop;
+    private DateTime _syncUntil;
+    private bool _syncing;
+
+    /// <summary>
+    /// Moves the blur window to exactly cover the island surface. Size changes arrive through
+    /// SizeChanged; moves that happen in a render transform (rise, sink) are followed frame by frame
+    /// for a short while via <see cref="KeepBackdropSynced"/>.
+    /// </summary>
+    private void SyncBackdrop()
+    {
+        if (_backdrop is null)
+        {
+            return;
+        }
+
+        if (!IsVisible || Stage.Opacity < 0.95 || Surface.ActualWidth < 1 || PresentationSource.FromVisual(Surface) is null)
+        {
+            _backdrop.Hide();
+            return;
+        }
+
+        var topLeft = Surface.PointToScreen(new Point(0, 0));
+        var bottomRight = Surface.PointToScreen(new Point(Surface.ActualWidth, Surface.ActualHeight));
+        _backdrop.Place(
+            (int)Math.Round(topLeft.X), (int)Math.Round(topLeft.Y),
+            (int)Math.Round(bottomRight.X - topLeft.X), (int)Math.Round(bottomRight.Y - topLeft.Y),
+            _hwnd, smallCorners: _shape == SurfaceShape.Resting);
+    }
+
+    private void KeepBackdropSynced(TimeSpan duration)
+    {
+        if (_backdrop is null)
+        {
+            return;
+        }
+
+        var until = DateTime.UtcNow + duration;
+        if (until > _syncUntil)
+        {
+            _syncUntil = until;
+        }
+
+        if (!_syncing)
+        {
+            _syncing = true;
+            CompositionTarget.Rendering += OnRenderingSync;
+        }
+    }
+
+    private void OnRenderingSync(object? sender, EventArgs e)
+    {
+        SyncBackdrop();
+        if (DateTime.UtcNow > _syncUntil)
+        {
+            CompositionTarget.Rendering -= OnRenderingSync;
+            _syncing = false;
+            SyncBackdrop();
+        }
+    }
 
     public Placement Placement { get; set; } = Placement.AboveTaskbar;
 
@@ -161,6 +233,7 @@ public partial class IslandWindow : Window
         SetAttention(scene.Attention);
         SetBubble(scene.Shape == SurfaceShape.Pill ? scene.Bubble : null, reduced);
         _shape = scene.Shape;
+        KeepBackdropSynced(TimeSpan.FromMilliseconds(450));
     }
 
     /// <summary>The signature "needs you" moment: one gentle orange pulse on the edge, then it holds still.</summary>
@@ -218,6 +291,7 @@ public partial class IslandWindow : Window
 
         StageShift.BeginAnimation(TranslateTransform.YProperty, Motion.To(0, Motion.Rise, Motion.Spring));
         Stage.BeginAnimation(OpacityProperty, Motion.To(1, TimeSpan.FromMilliseconds(150), Motion.Decelerate));
+        KeepBackdropSynced(TimeSpan.FromMilliseconds(400));
         _ = token;
     }
 
@@ -227,6 +301,7 @@ public partial class IslandWindow : Window
         var token = ++_visibilityToken;
         var to = _anchorBottom ? 8 : -8;
         var duration = Motion.Reduced ? Motion.ReducedCrossfade : Motion.Sink;
+        _backdrop?.Hide(); // the blur can't fade, so it goes first and the tint fades out over nothing
 
         var fade = Motion.To(0, duration, Motion.Accelerate);
         fade.Completed += (_, _) =>
@@ -304,6 +379,7 @@ public partial class IslandWindow : Window
         }
 
         DebugLog.Write($"Reposition took {watch.Elapsed.TotalMilliseconds:N1} ms");
+        KeepBackdropSynced(TimeSpan.FromMilliseconds(100));
     }
 
     public void EnsureTopmost()
@@ -311,7 +387,14 @@ public partial class IslandWindow : Window
         if (_hwnd != IntPtr.Zero && IsVisible)
         {
             Win32.SetWindowPos(_hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0, Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
+            SyncBackdrop(); // keep the blur directly beneath the island
         }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _backdrop?.Dispose();
+        base.OnClosed(e);
     }
 
     // ------------------------------------------------------------------ Internals
@@ -326,6 +409,8 @@ public partial class IslandWindow : Window
         style &= ~Win32.WS_EX_APPWINDOW;
         Win32.SetWindowLongPtr(_hwnd, Win32.GWL_EXSTYLE, new IntPtr(style));
 
+        _backdrop = Backdrop.TryCreate();
+        DebugLog.Write($"Backdrop: {BackdropKind}");
         Reposition();
     }
 
@@ -395,15 +480,23 @@ public partial class IslandWindow : Window
     private void ApplyShape(SurfaceShape shape, bool reduced)
     {
         var resting = shape == SurfaceShape.Resting;
-        var radius = resting ? 3 : 8;
+        var radius = resting ? RestingRadius : 8;
         _clipRadius = radius;
         SurfaceFill.CornerRadius = new CornerRadius(radius);
-        SurfaceFill.BorderThickness = new Thickness(resting ? 0 : 1);
+        SurfaceFill.BorderThickness = new Thickness(1);
+        // A faint, translucent edge like Windows' own flyouts; the blurred backdrop does the rest.
+        SurfaceFill.SetResourceReference(Border.BorderBrushProperty, "Brush.StrokeAcrylic");
+
+        // The resting line is small, so its hit area is much larger than what is drawn: wide, tall,
+        // and reaching all the way down to the taskbar edge so there is no dead gap below it.
         HitArea.Background = resting ? HitBrush : Brushes.Transparent;
         HitArea.Padding = resting
-            ? (_anchorBottom ? new Thickness(14, 12, 14, 0) : new Thickness(14, 0, 14, 12))
+            ? (_anchorBottom ? new Thickness(32, 18, 32, StageGap) : new Thickness(32, StageGap, 32, 18))
             : new Thickness(0);
-        Cursor = resting ? Cursors.Arrow : null;
+        HitArea.Margin = resting
+            ? (_anchorBottom ? new Thickness(0, 0, 0, -StageGap) : new Thickness(0, -StageGap, 0, 0))
+            : new Thickness(0);
+        HitArea.Cursor = resting ? Cursors.Hand : null;
         UpdateClip(ContentClip.RenderSize);
 
         // Fluent Shadow 08 under the compact island, Shadow 28 under the expanded panel.

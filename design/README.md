@@ -13,6 +13,9 @@ flows and settings.
 
 Where the build differs from the file:
 
-- `surface/island` is `#141414` at 97% rather than 92%, because the window can't apply the 60 px acrylic blur
-  (see the README's known gaps).
+- `surface/island` is `#141414` at 72% over a blur-behind backdrop rather than 92% over the 60 px Fluent
+  acrylic, because Windows' acrylic goes flat grey on windows that never activate. Without blur it is 97%.
+- The edge is white at 12% (`Brush.StrokeAcrylic`) instead of `stroke/surface`, which reads better over blur.
+- The resting line is 112 × 10 instead of 64 × 6, with a larger hit area, because the spec size was hard to
+  see and hit on a dark taskbar.
 - Shadows 08 and 28 are drawn as layered soft shadows, not a blur effect, to keep animation cheap.

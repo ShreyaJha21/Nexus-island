@@ -25,13 +25,13 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- Hit area: gives the 6 px resting line a comfortable hover target. -->
+            <!-- Hit area: gives the thin resting line a comfortable hover target. -->
             <Border x:Name="HitArea" Grid.Column="1" VerticalAlignment="Bottom" Background="Transparent">
-                <Grid x:Name="Surface" Width="64" Height="6" VerticalAlignment="Bottom"
+                <Grid x:Name="Surface" Width="112" Height="10" VerticalAlignment="Bottom"
                       AutomationProperties.Name="Nexus island" AutomationProperties.LiveSetting="Polite">
-                    <local:SoftShadow x:Name="Shadow" Blur="8" OffsetY="4" Strength="0.28" Radius="3" />
-                    <Border x:Name="SurfaceFill" CornerRadius="3" Background="{DynamicResource Brush.Island}"
-                            BorderBrush="{StaticResource Brush.StrokeSurface}" BorderThickness="0" />
+                    <local:SoftShadow x:Name="Shadow" Blur="8" OffsetY="4" Strength="0.28" Radius="5" />
+                    <Border x:Name="SurfaceFill" CornerRadius="5" Background="{DynamicResource Brush.Island}"
+                            BorderBrush="{DynamicResource Brush.StrokeAcrylic}" BorderThickness="1" />
 
                     <Grid x:Name="ContentClip">
                         <c:AnchorPanel x:Name="OutgoingHost" IsHitTestVisible="False" />
@@ -58,7 +58,7 @@
                   HorizontalAlignment="Left" VerticalAlignment="Bottom" Opacity="0" Visibility="Collapsed"
                   Cursor="Hand" AutomationProperties.Name="Next activity">
                 <local:SoftShadow Blur="8" OffsetY="4" Strength="0.28" Radius="8" />
-                <Border CornerRadius="8" Background="{DynamicResource Brush.Island}"
+                <Border CornerRadius="8" Background="{DynamicResource Brush.IslandOpaque}"
                         BorderBrush="{StaticResource Brush.StrokeSurface}" BorderThickness="1">
                     <ContentPresenter x:Name="BubbleContent" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>

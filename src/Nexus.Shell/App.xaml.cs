@@ -62,7 +62,7 @@ public partial class App : Application
         _store = new SettingsStore();
         _settings = _store.Load();
         EnsureAgentCredentials();
-        _ = new SystemTheme(_settings.UseSystemAccent);
+        var theme = new SystemTheme(_settings.UseSystemAccent);
 
         _focus = new FocusMode(_settings, Save);
         _music = new MusicMode(_settings);
@@ -71,6 +71,7 @@ public partial class App : Application
 
         _window = new IslandWindow { Placement = _settings.Placement };
         var handle = new WindowInteropHelper(_window).EnsureHandle();
+        theme.SetBackdrop(_window.BackdropKind);
 
         _controller = new IslandController(
             _window,

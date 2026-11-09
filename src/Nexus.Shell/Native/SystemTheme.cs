@@ -53,10 +53,38 @@ internal sealed class SystemTheme
             }
         }
 
-        // When transparency effects are off, surfaces fall back to solid.
-        resources["Brush.Island"] = TransparencyEnabled
-            ? new SolidColorBrush(Color.FromArgb(0xF7, 0x14, 0x14, 0x14))
-            : new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x1F));
+        // Over a blurred backdrop the island is a translucent tint, so the colors behind show through
+        // softly, like the Start menu. Without blur it is nearly opaque (text over sharp, unblurred
+        // content would be hard to read), and solid when transparency effects are off.
+        resources["Brush.Island"] = new SolidColorBrush(!TransparencyEnabled
+            ? Color.FromRgb(0x1F, 0x1F, 0x1F)
+            : Color.FromArgb(IslandAlpha(_backdrop), 0x14, 0x14, 0x14));
+    }
+
+    private Backdrop.Kind _backdrop = Backdrop.Kind.None;
+
+    /// <summary>Called once the island knows whether Windows will blur behind it.</summary>
+    public void SetBackdrop(Backdrop.Kind kind)
+    {
+        _backdrop = kind;
+        Apply();
+    }
+
+    private static byte IslandAlpha(Backdrop.Kind kind)
+    {
+        var overrideHex = Environment.GetEnvironmentVariable("NEXUS_TINT");
+        if (kind != Backdrop.Kind.None && overrideHex is { Length: 2 } && byte.TryParse(overrideHex,
+                System.Globalization.NumberStyles.HexNumber, null, out var custom))
+        {
+            return custom;
+        }
+
+        return kind switch
+        {
+            Backdrop.Kind.SystemAcrylic => 0x80, // Windows' acrylic already adds its own dark tint
+            Backdrop.Kind.Blur => 0xB8,          // plain blur needs more tint to keep text readable
+            _ => 0xF7,
+        };
     }
 
     private static SolidColorBrush Brush(Windows.UI.Color c)

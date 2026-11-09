@@ -1,0 +1,69 @@
+<UserControl x:Class="Nexus.Modes.Focus.FocusPanelView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Width="360" Padding="16">
+    <!-- Figma: Island / Panel, Mode=Focus (7:19) -->
+    <StackPanel>
+        <!-- Header -->
+        <DockPanel LastChildFill="False">
+            <c:NexusIcon Kind="timer" Width="20" Height="20" DockPanel.Dock="Left">
+                <c:NexusIcon.Style>
+                    <Style TargetType="c:NexusIcon">
+                        <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsBreak}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Success}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </c:NexusIcon.Style>
+            </c:NexusIcon>
+            <TextBlock Text="{Binding HeaderTitle}" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" DockPanel.Dock="Left" />
+            <TextBlock Text="{Binding SessionText}" Style="{StaticResource Text.Caption}" DockPanel.Dock="Right" />
+        </DockPanel>
+
+        <!-- Running or on a break -->
+        <StackPanel Visibility="{Binding IsDone, Converter={StaticResource InverseBoolToVisibility}}">
+            <StackPanel Margin="0,12,0,0">
+                <TextBlock Text="{Binding TimeText}" Style="{StaticResource Text.Title}" />
+                <TextBlock Text="{Binding PanelCaption}" Style="{StaticResource Text.Caption}" />
+            </StackPanel>
+
+            <ProgressBar Value="{Binding Progress, Mode=OneWay}" Margin="0,12,0,0">
+                <ProgressBar.Style>
+                    <Style TargetType="ProgressBar" BasedOn="{StaticResource Progress.Thin}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsBreak}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Success}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ProgressBar.Style>
+            </ProgressBar>
+
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Content="{Binding PauseText}" Command="{Binding PauseResumeCommand}" Style="{StaticResource Button.Primary}" />
+                <Button Content="{Binding StopText}" Command="{Binding StopCommand}" Style="{StaticResource Button.Secondary}" Margin="8,0,0,0" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0"
+                        Visibility="{Binding IsFocus, Converter={StaticResource BoolToVisibility}}">
+                <Ellipse Width="6" Height="6" Fill="{DynamicResource Brush.Accent}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding GuardText}" Style="{StaticResource Text.Caption}" Margin="6,0,0,0" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Session done -->
+        <StackPanel Visibility="{Binding IsDone, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel Margin="0,12,0,0">
+                <TextBlock Text="Session done" Style="{StaticResource Text.Title}" />
+                <TextBlock Text="{Binding DoneSubtitle}" Style="{StaticResource Text.Caption}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Content="Start break" Command="{Binding StartBreakCommand}" Style="{StaticResource Button.Primary}" />
+                <Button Content="Skip break" Command="{Binding StopCommand}" Style="{StaticResource Button.Secondary}" Margin="8,0,0,0" />
+            </StackPanel>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

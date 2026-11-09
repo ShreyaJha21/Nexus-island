@@ -1,0 +1,20 @@
+<UserControl x:Class="Nexus.Shell.Views.WhyView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls;assembly=Nexus.Modes"
+             Width="360" Padding="16">
+    <!-- "Why am I seeing this?": names the signal and the rule behind what the island shows. -->
+    <StackPanel>
+        <StackPanel Orientation="Horizontal">
+            <c:NexusIcon Kind="info" Width="20" Height="20" Foreground="{DynamicResource Brush.Accent}" />
+            <TextBlock Text="Why am I seeing this?" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" />
+        </StackPanel>
+        <TextBlock Text="{Binding Reason}" Style="{StaticResource Text.Body}" TextWrapping="Wrap" TextTrimming="None" Margin="0,12,0,0" />
+        <TextBlock Text="{Binding PriorityText}" Style="{StaticResource Text.Caption}" Margin="0,8,0,0" />
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+            <Button Content="Got it" Command="{Binding CloseCommand}" Style="{StaticResource Button.Primary}" />
+            <Button Content="{Binding PauseText}" Command="{Binding PauseCommand}" Style="{StaticResource Button.Secondary}" Margin="8,0,0,0"
+                    Visibility="{Binding CanPause, Converter={StaticResource BoolToVisibility}}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

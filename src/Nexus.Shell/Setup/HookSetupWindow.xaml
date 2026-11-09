@@ -1,0 +1,48 @@
+<Window x:Class="Nexus.Shell.Setup.HookSetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="clr-namespace:Nexus.Modes.Controls;assembly=Nexus.Modes"
+        Title="Connect Claude Code to Nexus" Width="640" Height="640" MinWidth="520" MinHeight="480"
+        WindowStartupLocation="CenterScreen" Background="#FF202020" ResizeMode="CanResize"
+        FontFamily="{StaticResource Font.Text}" UseLayoutRounding="True">
+    <!-- One-click setup: shows the exact hooks Nexus will add and writes them only after approval. -->
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal">
+            <c:NexusIcon Kind="bot" Width="24" Height="24" Foreground="{DynamicResource Brush.Accent}" />
+            <TextBlock Text="Connect Claude Code" Style="{StaticResource Text.Subtitle}" Margin="12,0,0,0" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Margin="0,16,0,0">
+            <TextBlock Style="{StaticResource Text.Body}" TextWrapping="Wrap" TextTrimming="None"
+                       Text="Nexus shows what Claude Code is doing and lets you know the moment it needs you. To do that, it adds these hooks to your Claude Code settings. They post status events to Nexus on this PC only (127.0.0.1), with a private token." />
+            <TextBlock Style="{StaticResource Text.BodySecondary}" TextWrapping="Wrap" TextTrimming="None" Margin="0,8,0,0"
+                       Text="Nexus only receives status. It never approves, denies or sends anything back to Claude, and it shows tool and file names, never file contents or prompts." />
+            <TextBlock x:Name="PathText" Style="{StaticResource Text.Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,12,0,0" />
+        </StackPanel>
+
+        <Border Grid.Row="2" Margin="0,12,0,0" CornerRadius="4" Background="{StaticResource Brush.Solid}"
+                BorderBrush="{StaticResource Brush.StrokeSurface}" BorderThickness="1">
+            <TextBox x:Name="Preview" IsReadOnly="True" Background="Transparent" BorderThickness="0" Padding="12"
+                     Foreground="{StaticResource Brush.TextPrimary}" FontFamily="{StaticResource Font.Mono}" FontSize="12"
+                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap"
+                     CaretBrush="White" AutomationProperties.Name="Hooks that will be added" />
+        </Border>
+
+        <TextBlock x:Name="StatusText" Grid.Row="3" Style="{StaticResource Text.Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,12,0,0" />
+
+        <DockPanel Grid.Row="4" Margin="0,16,0,0" LastChildFill="False">
+            <Button x:Name="RemoveButton" Content="Remove hooks" Style="{StaticResource Button.Secondary}" DockPanel.Dock="Left" Click="OnRemove" />
+            <Button x:Name="ApproveButton" Content="Add hooks" Style="{StaticResource Button.Primary}" DockPanel.Dock="Right"
+                    Margin="8,0,0,0" Click="OnApprove" IsDefault="True" />
+            <Button Content="Cancel" Style="{StaticResource Button.Secondary}" DockPanel.Dock="Right" Click="OnCancel" IsCancel="True" />
+        </DockPanel>
+    </Grid>
+</Window>

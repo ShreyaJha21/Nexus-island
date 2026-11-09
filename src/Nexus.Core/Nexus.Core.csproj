@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Platform-neutral logic: priority engine, focus timer, agent tracking, settings.
+       No UI and no Windows APIs, so it is fast to unit test. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Nexus.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nexus.Core.Tests" />
+  </ItemGroup>
+</Project>

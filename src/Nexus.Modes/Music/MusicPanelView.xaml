@@ -1,0 +1,51 @@
+<UserControl x:Class="Nexus.Modes.Music.MusicPanelView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Width="360" Padding="16">
+    <!-- Figma: Island / Panel, Mode=Music (7:98) -->
+    <StackPanel>
+        <!-- Now playing -->
+        <DockPanel>
+            <Border Width="56" Height="56" CornerRadius="4" Background="{StaticResource Brush.ArtPlaceholder}" DockPanel.Dock="Left">
+                <Border CornerRadius="4" Visibility="{Binding HasArt, Converter={StaticResource BoolToVisibility}}">
+                    <Border.Background>
+                        <ImageBrush ImageSource="{Binding AlbumArt}" Stretch="UniformToFill" />
+                    </Border.Background>
+                </Border>
+            </Border>
+            <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="{Binding Title}" Style="{StaticResource Text.BodyStrong}" ToolTip="{Binding Title}" />
+                <TextBlock Text="{Binding Artist}" Style="{StaticResource Text.BodySecondary}" Margin="0,2,0,0"
+                           Visibility="{Binding HasArtist, Converter={StaticResource BoolToVisibility}}" />
+                <TextBlock Text="{Binding SourceText}" Style="{StaticResource Text.Caption}" Margin="0,2,0,0" />
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Progress -->
+        <StackPanel Margin="0,12,0,0" Visibility="{Binding HasTimeline, Converter={StaticResource BoolToVisibility}}">
+            <ProgressBar Value="{Binding Progress, Mode=OneWay}" Style="{StaticResource Progress.Thin}"
+                         Foreground="{StaticResource Brush.TextPrimary}" />
+            <DockPanel Margin="0,4,0,0">
+                <TextBlock Text="{Binding PositionText}" Style="{StaticResource Text.Caption}" DockPanel.Dock="Left" />
+                <TextBlock Text="{Binding DurationText}" Style="{StaticResource Text.Caption}" HorizontalAlignment="Right" />
+            </DockPanel>
+        </StackPanel>
+
+        <!-- Controls -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
+            <Button Style="{StaticResource Button.Icon}" Command="{Binding PreviousCommand}" ToolTip="Previous"
+                    AutomationProperties.Name="Previous track">
+                <c:NexusIcon Kind="previous" />
+            </Button>
+            <Button Style="{StaticResource Button.IconPrimary}" Command="{Binding PlayPauseCommand}" Margin="16,0"
+                    ToolTip="{Binding PlayPauseLabel}" AutomationProperties.Name="{Binding PlayPauseLabel}">
+                <c:NexusIcon Kind="{Binding PlayPauseIcon}" />
+            </Button>
+            <Button Style="{StaticResource Button.Icon}" Command="{Binding NextCommand}" ToolTip="Next"
+                    AutomationProperties.Name="Next track">
+                <c:NexusIcon Kind="next" />
+            </Button>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

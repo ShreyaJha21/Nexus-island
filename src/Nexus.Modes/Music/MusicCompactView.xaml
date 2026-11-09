@@ -1,0 +1,20 @@
+<UserControl x:Class="Nexus.Modes.Music.MusicCompactView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Height="32" Padding="12,0">
+    <!-- Figma: Island / Compact, Mode=Music (4:94). Long titles: one line, ellipsis at 260 px. -->
+    <StackPanel Orientation="Horizontal">
+        <Border Width="20" Height="20" CornerRadius="4" Background="{StaticResource Brush.ArtPlaceholder}" VerticalAlignment="Center">
+            <Border CornerRadius="4" Visibility="{Binding HasArt, Converter={StaticResource BoolToVisibility}}">
+                <Border.Background>
+                    <ImageBrush ImageSource="{Binding AlbumArt}" Stretch="UniformToFill" />
+                </Border.Background>
+            </Border>
+        </Border>
+        <TextBlock Text="{Binding Title}" Style="{StaticResource Text.BodyStrong}" MaxWidth="260" Margin="8,0,0,0" />
+        <TextBlock Text="{Binding Artist}" Style="{StaticResource Text.Caption}" MaxWidth="140" Margin="8,0,0,0"
+                   Visibility="{Binding HasArtist, Converter={StaticResource BoolToVisibility}}" />
+        <c:LevelMeter IsActive="{Binding IsPlaying}" Margin="8,0,0,0" />
+    </StackPanel>
+</UserControl>

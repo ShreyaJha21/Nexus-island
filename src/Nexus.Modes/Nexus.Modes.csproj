@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The five island modes (MVP: Focus, Music, Agent), their compact and expanded views,
+       and the shared Fluent theme. Sources only update a mode's state; views bind to it. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>Nexus.Modes</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nexus.Core\Nexus.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Icons come straight from the Figma file (design/icons) and are drawn at runtime by NexusIcon. -->
+    <Resource Include="..\..\design\icons\*.svg" LinkBase="Assets\Icons" />
+  </ItemGroup>
+</Project>

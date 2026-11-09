@@ -1,0 +1,42 @@
+<UserControl x:Class="Nexus.Modes.Focus.FocusCompactView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Height="32" Padding="12,0">
+    <!-- Figma: Island / Compact, Mode=Focus (4:57), Focus · Break (18:339), Session done -->
+    <Grid>
+        <!-- Focus: ring · 18:42 · left · guarded dots -->
+        <StackPanel Orientation="Horizontal" Visibility="{Binding IsFocus, Converter={StaticResource BoolToVisibility}}">
+            <c:Ring Progress="{Binding Progress}" Brush="{DynamicResource Brush.Accent}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding TimeText}" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" />
+            <TextBlock Text="{Binding CompactCaption}" Style="{StaticResource Text.Caption}" Margin="8,0,0,0" />
+            <ItemsControl ItemsSource="{Binding GuardedDots}" Margin="4,0,0,0" VerticalAlignment="Center" Focusable="False"
+                          ToolTip="{Binding GuardText}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Ellipse Width="5" Height="5" Margin="4,0,0,0" Fill="{StaticResource Brush.TextSecondary}" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <!-- Break: green ring · Break · 4:12 left -->
+        <StackPanel Orientation="Horizontal" Visibility="{Binding IsBreak, Converter={StaticResource BoolToVisibility}}">
+            <c:Ring Progress="{Binding Progress}" Brush="{StaticResource Brush.Success}" VerticalAlignment="Center" />
+            <TextBlock Text="Break" Style="{StaticResource Text.BodyStrong}" Foreground="{StaticResource Brush.Success}" Margin="8,0,0,0" />
+            <TextBlock Text="{Binding BreakCaption}" Style="{StaticResource Text.Caption}" Margin="8,0,0,0" />
+        </StackPanel>
+
+        <!-- Session done, after the banner settles -->
+        <StackPanel Orientation="Horizontal" Visibility="{Binding IsDone, Converter={StaticResource BoolToVisibility}}">
+            <c:NexusIcon Kind="check" Foreground="{StaticResource Brush.Success}" VerticalAlignment="Center" />
+            <TextBlock Text="Session done" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" />
+            <TextBlock Text="Start break" Style="{StaticResource Text.Caption}" Foreground="{DynamicResource Brush.Accent}" Margin="8,0,0,0" />
+        </StackPanel>
+    </Grid>
+</UserControl>

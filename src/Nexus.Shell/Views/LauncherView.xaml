@@ -1,0 +1,79 @@
+<UserControl x:Class="Nexus.Shell.Views.LauncherView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls;assembly=Nexus.Modes"
+             Width="360" Padding="16">
+    <!-- Figma: Island / Idle, State=Launcher (click when idle) (15:119) -->
+    <StackPanel>
+        <!-- Clock -->
+        <StackPanel Orientation="Horizontal">
+            <TextBlock Text="{Binding ClockMain}" Style="{StaticResource Text.Title}" />
+            <TextBlock Text="{Binding ClockDetail}" Style="{StaticResource Text.Caption}" Margin="8,0,0,5" VerticalAlignment="Bottom" />
+        </StackPanel>
+
+        <!-- Quick actions -->
+        <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition />
+                <RowDefinition Height="8" />
+                <RowDefinition />
+            </Grid.RowDefinitions>
+
+            <Button Style="{StaticResource Button.Tile}" Command="{Binding StartFocusCommand}" AutomationProperties.Name="Start focus">
+                <StackPanel>
+                    <c:NexusIcon Kind="timer" Width="20" Height="20" Foreground="{DynamicResource Brush.Accent}" HorizontalAlignment="Left" />
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <TextBlock Text="Start focus" Style="{StaticResource Text.Body}" />
+                        <TextBlock Text="{Binding FocusHint}" Style="{StaticResource Text.Caption}" Margin="6,0,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </Button>
+
+            <!-- Calendar, Swatch and Cricket ship in v1; the tiles are shown so the layout matches the design. -->
+            <Button Grid.Column="2" Style="{StaticResource Button.Tile}" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                    ToolTip="Calendar arrives in v1">
+                <StackPanel>
+                    <c:NexusIcon Kind="calendar" Width="20" Height="20" Foreground="{DynamicResource Brush.Accent}" HorizontalAlignment="Left" />
+                    <TextBlock Text="Calendar" Style="{StaticResource Text.Body}" Margin="0,6,0,0" />
+                </StackPanel>
+            </Button>
+            <Button Grid.Row="2" Style="{StaticResource Button.Tile}" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                    ToolTip="Swatch arrives in v1">
+                <StackPanel>
+                    <c:NexusIcon Kind="eyedropper" Width="20" Height="20" HorizontalAlignment="Left" />
+                    <TextBlock Text="Pick a color" Style="{StaticResource Text.Body}" Margin="0,6,0,0" />
+                </StackPanel>
+            </Button>
+            <Button Grid.Row="2" Grid.Column="2" Style="{StaticResource Button.Tile}" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                    ToolTip="Live cricket arrives in v1">
+                <StackPanel>
+                    <c:NexusIcon Kind="cricket" Width="20" Height="20" HorizontalAlignment="Left" />
+                    <TextBlock Text="Cricket" Style="{StaticResource Text.Body}" Margin="0,6,0,0" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <!-- Last finished activity -->
+        <DockPanel Margin="0,12,0,0" Visibility="{Binding HasRecent, Converter={StaticResource BoolToVisibility}}">
+            <c:NexusIcon Kind="check" Foreground="{StaticResource Brush.Success}" DockPanel.Dock="Left" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding RecentAgo}" Style="{StaticResource Text.Caption}" DockPanel.Dock="Right" />
+            <TextBlock Text="{Binding RecentText}" Style="{StaticResource Text.Body}" Margin="8,0,8,0" />
+        </DockPanel>
+
+        <!-- Agent not connected · Set up (Figma 18:246) -->
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0"
+                    Visibility="{Binding AgentConnected, Converter={StaticResource InverseBoolToVisibility}}">
+            <c:NexusIcon Kind="bot" Foreground="{StaticResource Brush.TextSecondary}" VerticalAlignment="Center" />
+            <TextBlock Text="Agent not connected" Style="{StaticResource Text.BodySecondary}" Margin="8,0,0,0" />
+            <Button Content="Set up" Style="{StaticResource Button.Link}" Command="{Binding SetupAgentCommand}" Margin="8,0,0,0" />
+        </StackPanel>
+
+        <TextBlock Margin="0,12,0,0" Style="{StaticResource Text.Caption}" TextWrapping="Wrap"
+                   Text="{Binding HideHint}" />
+    </StackPanel>
+</UserControl>

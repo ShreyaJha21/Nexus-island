@@ -4,8 +4,10 @@
 taskbar and shows one thing at a time: your focus timer, a Claude Code agent that needs you, or the music
 that's playing. It stays quiet otherwise.
 
-- **Taskbar-anchored.** Floats just above the centre of the taskbar, so it never covers tabs or title bars.
-  Falls back to top-centre when the taskbar is on another edge or auto-hidden.
+- **Taskbar-anchored.** Floats in the middle of the screen, just above the taskbar, so it never covers tabs
+  or title bars. Two optional settings: `"DockOverApps": true` tucks it into empty taskbar space when a
+  maximized app would be covered, and tray menu → *Move to top center* hangs it from the top edge of the
+  screen, like a MacBook's notch.
 - **Context-aware.** A fixed priority ladder decides what shows. The next activity becomes a 32 px bubble,
   the rest a `+N` chip. A focus session turns everything below it into dots (Focus Guard).
 - **Fluent-native.** Fluent 2 tokens, Segoe UI Variable, the Windows accent colour, 8 px corners and

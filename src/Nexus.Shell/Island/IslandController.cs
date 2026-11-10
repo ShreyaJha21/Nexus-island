@@ -237,6 +237,71 @@ public sealed class IslandController
 
     public void Reposition() => _window.Reposition();
 
+    // ================================================================== Docking into the taskbar
+
+    private DispatcherTimer? _dockTimer;
+    private bool _covered;
+    private int _dockRequest;
+
+    /// <summary>The watcher reports whether the window in front reaches the island's spot.</summary>
+    public void SetCovered(bool covered)
+    {
+        _covered = covered;
+        ScheduleDock();
+    }
+
+    /// <summary>Another window came to the front; the taskbar's buttons may have moved.</summary>
+    public void OnForegroundChanged()
+    {
+        if (_window.IsDocked)
+        {
+            ScheduleDock();
+        }
+    }
+
+    public void RefreshDock() => ScheduleDock();
+
+    /// <summary>Debounced, so flicking through windows with Alt+Tab doesn't bounce the island.</summary>
+    private void ScheduleDock()
+    {
+        _dockTimer ??= Timer(TimeSpan.FromMilliseconds(350), ApplyDock);
+        _dockTimer.Restart();
+    }
+
+    private void ApplyDock()
+    {
+        _dockTimer?.Stop();
+
+        // Never move the island while the user is looking at a panel, a banner or the hide toast;
+        // Collapse and the end of a banner call this again.
+        if (_state is State.Expanded or State.Banner or State.Toast)
+        {
+            return;
+        }
+
+        var want = _covered && _settings.DockOverApps && _window.FloatingZone is not null;
+        if (!want)
+        {
+            _window.Dock(null);
+            return;
+        }
+
+        // Reading the taskbar takes a couple of hundred milliseconds: do it off the UI thread.
+        var request = ++_dockRequest;
+        var minWidth = (int)Math.Round(100 * _window.ScaleFactor);
+        Task.Run(() => TaskbarLayout.FindGaps(minWidth)).ContinueWith(t =>
+        {
+            if (request != _dockRequest || !_covered || _state is State.Expanded or State.Banner or State.Toast)
+            {
+                return;
+            }
+
+            // The widest free stretch; on a tie, the leftmost (where Windows puts the weather widget).
+            var gap = t.Result?.OrderByDescending(g => g.Width).ThenBy(g => g.Left).Cast<TaskbarGap?>().FirstOrDefault();
+            _window.Dock(gap); // no room in the taskbar: stay above it
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
     private void UpdateVisibility()
     {
         var shouldShow = !_hiddenByUser && !_hiddenByFullscreen;
@@ -268,6 +333,8 @@ public sealed class IslandController
         {
             Render();
         }
+
+        ScheduleDock();
     }
 
     private void CheckHiddenUntil()
@@ -445,6 +512,7 @@ public sealed class IslandController
         EndExpansion();
         _state = State.Collapsed;
         Render();
+        ScheduleDock(); // a dock change may have waited for the panel to close
     }
 
     private void EndExpansion()
@@ -484,6 +552,7 @@ public sealed class IslandController
         {
             EndBanner();
             Render();
+            ScheduleDock();
         }
         else
         {

@@ -20,6 +20,17 @@ public sealed class AnchorPanel : Panel
         set => SetValue(AnchorBottomProperty, value);
     }
 
+    public static readonly DependencyProperty AnchorLeftProperty = DependencyProperty.Register(
+        nameof(AnchorLeft), typeof(bool), typeof(AnchorPanel),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsArrange));
+
+    /// <summary>Pin children to the left edge instead of centering them (the island docked in the taskbar).</summary>
+    public bool AnchorLeft
+    {
+        get => (bool)GetValue(AnchorLeftProperty);
+        set => SetValue(AnchorLeftProperty, value);
+    }
+
     /// <summary>Raised (after layout) when a child's natural size changes, e.g. a longer track title.</summary>
     public event EventHandler? ChildSizeChanged;
 
@@ -57,7 +68,7 @@ public sealed class AnchorPanel : Panel
         foreach (UIElement child in InternalChildren)
         {
             var size = child.DesiredSize;
-            var x = (finalSize.Width - size.Width) / 2;
+            var x = AnchorLeft ? 0 : (finalSize.Width - size.Width) / 2;
             var y = AnchorBottom ? finalSize.Height - size.Height : 0;
             child.Arrange(new Rect(new Point(Math.Round(x), Math.Round(y)), size));
         }

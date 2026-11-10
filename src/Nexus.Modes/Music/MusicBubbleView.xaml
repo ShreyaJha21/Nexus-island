@@ -3,5 +3,5 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:c="clr-namespace:Nexus.Modes.Controls">
     <!-- Figma: Split · Focus + music (18:222), the music bubble -->
-    <c:LevelMeter IsActive="{Binding IsPlaying}" HorizontalAlignment="Center" />
+    <c:LevelMeter IsActive="{Binding IsPlaying}" BarBrush="{Binding BrandBrush}" HorizontalAlignment="Center" />
 </UserControl>

@@ -65,7 +65,7 @@ public partial class App : Application
         var theme = new SystemTheme(_settings.UseSystemAccent);
 
         _focus = new FocusMode(_settings, Save);
-        _music = new MusicMode(_settings);
+        _music = new MusicMode(_settings, WindowFinder.MusicSite);
         _agent = new AgentMode(cwd => WindowFinder.FocusTerminal(cwd), OpenAgentSetup);
         StartAgentServer();
 
@@ -99,9 +99,11 @@ public partial class App : Application
                 "Another app already uses this shortcut. Choose a different HideShortcut in Nexus settings (tray menu > Open settings file), then restart Nexus.");
         }
 
-        _fullscreen = new FullscreenWatcher(() => _window.Handle);
+        _fullscreen = new FullscreenWatcher(() => _window.Handle, () => _window.FloatingZone);
         _fullscreen.Changed += _controller.SetFullscreen;
+        _fullscreen.CoverageChanged += _controller.SetCovered;
         _fullscreen.ForegroundChanged += _window.EnsureTopmost;
+        _fullscreen.ForegroundChanged += _controller.OnForegroundChanged;
 
         SystemEvents.DisplaySettingsChanged += (_, _) => Dispatcher.InvokeAsync(_controller.Reposition);
         SystemParameters.StaticPropertyChanged += OnSystemParameterChanged;

@@ -83,6 +83,88 @@ internal static class WindowFinder
         return true;
     }
 
+    private static readonly HashSet<string> BrowserProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "chrome", "msedge", "brave", "firefox", "opera", "opera_gx", "vivaldi", "arc", "zen", "floorp",
+    };
+
+    /// <summary>
+    /// Which site a browser is playing music from, read from its window titles: YouTube titles its
+    /// tabs "&lt;video&gt; - YouTube", YouTube Music "&lt;song&gt; - YouTube Music", and so on. A window whose
+    /// title contains the track title wins; otherwise any browser window showing one of these sites.
+    /// Returns "youtube", "youtubemusic", "spotify", "soundcloud" or null.
+    /// </summary>
+    public static string? MusicSite(string appId, string trackTitle)
+    {
+        string? bestMatch = null;
+        string? anySite = null;
+
+        Win32.EnumWindows((hwnd, _) =>
+        {
+            if (!Win32.IsWindowVisible(hwnd))
+            {
+                return true;
+            }
+
+            var title = Win32.WindowText(hwnd);
+            var site = SiteFromTitle(title);
+            if (site is null)
+            {
+                return true;
+            }
+
+            Win32.GetWindowThreadProcessId(hwnd, out var pid);
+            try
+            {
+                using var process = Process.GetProcessById((int)pid);
+                if (!BrowserProcesses.Contains(process.ProcessName))
+                {
+                    return true;
+                }
+            }
+            catch (ArgumentException)
+            {
+                return true;
+            }
+
+            anySite ??= site;
+            if (!string.IsNullOrWhiteSpace(trackTitle) && title.Contains(trackTitle, StringComparison.OrdinalIgnoreCase))
+            {
+                bestMatch = site;
+                return false; // found the tab that is playing
+            }
+
+            return true;
+        }, IntPtr.Zero);
+
+        return bestMatch ?? anySite;
+    }
+
+    private static string? SiteFromTitle(string title)
+    {
+        if (title.Contains("YouTube Music", StringComparison.OrdinalIgnoreCase))
+        {
+            return "youtubemusic";
+        }
+
+        if (title.Contains("- YouTube", StringComparison.OrdinalIgnoreCase) || title.EndsWith("YouTube", StringComparison.OrdinalIgnoreCase))
+        {
+            return "youtube";
+        }
+
+        if (title.Contains("Spotify", StringComparison.OrdinalIgnoreCase))
+        {
+            return "spotify";
+        }
+
+        if (title.Contains("SoundCloud", StringComparison.OrdinalIgnoreCase))
+        {
+            return "soundcloud";
+        }
+
+        return null;
+    }
+
     public static void Focus(IntPtr hwnd)
     {
         if (Win32.IsIconic(hwnd))

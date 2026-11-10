@@ -16,6 +16,31 @@ public sealed class LevelMeter : StackPanel
     public static readonly DependencyProperty IsActiveProperty = DependencyProperty.Register(
         nameof(IsActive), typeof(bool), typeof(LevelMeter), new PropertyMetadata(false, (d, _) => ((LevelMeter)d).Update()));
 
+    /// <summary>Bar colour, e.g. the playing service's brand colour. Null uses the accent colour.</summary>
+    public static readonly DependencyProperty BarBrushProperty = DependencyProperty.Register(
+        nameof(BarBrush), typeof(Brush), typeof(LevelMeter), new PropertyMetadata(null, (d, _) => ((LevelMeter)d).ApplyBrush()));
+
+    public Brush? BarBrush
+    {
+        get => (Brush?)GetValue(BarBrushProperty);
+        set => SetValue(BarBrushProperty, value);
+    }
+
+    private void ApplyBrush()
+    {
+        foreach (var bar in _bars)
+        {
+            if (BarBrush is { } brush)
+            {
+                bar.Fill = brush;
+            }
+            else
+            {
+                bar.SetResourceReference(Shape.FillProperty, "Brush.Accent");
+            }
+        }
+    }
+
     private static readonly double[] RestHeights = [6, 11, 8];
     private readonly Rectangle[] _bars;
 

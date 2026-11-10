@@ -1,65 +1,134 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows.Threading;
 
 namespace Nexus.Shell.Native;
 
 /// <summary>
-/// Detects fullscreen apps, games and presentations so Nexus can get out of the way.
-/// Checks when the foreground window changes, plus a slow 2 s check for apps that go
-/// fullscreen without changing focus (F11 in a browser, a video player).
+/// Watches the window in front, for two things:
+/// <list type="bullet">
+/// <item>Fullscreen apps, games and presentations, so Nexus hides.</item>
+/// <item>Windows that reach the island's spot above the taskbar (maximized apps, tall windows),
+/// so the island can tuck into the taskbar instead of covering their toolbars or status bars.</item>
+/// </list>
+/// Checks when the foreground window changes, when a window finishes moving, resizing, minimizing or
+/// restoring, plus a light 1 s check for changes that raise no event (the maximize button).
 /// </summary>
 internal sealed class FullscreenWatcher : IDisposable
 {
-    private static readonly HashSet<string> ShellClasses = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
+    private static readonly HashSet<string> ShellClasses =
+    [
+        "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd",
+        "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow", "TopLevelWindowForOverflowXamlIsland",
+        "NotifyIconOverflowWindow", "ForegroundStaging", "MultitaskingViewFrame", "TaskListThumbnailWnd",
+    ];
+
+    private const uint EVENT_SYSTEM_MOVESIZEEND = 0x000B;
+    private const uint EVENT_SYSTEM_MINIMIZESTART = 0x0016;
+    private const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
+    private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+    private const int DWMWA_CLOAKED = 14;
 
     private readonly Func<IntPtr> _ownWindow;
-    private readonly Win32.WinEventProc _callback; // keep alive for the native hook
-    private readonly IntPtr _hook;
+    private readonly Func<Win32.RECT?> _islandZone;
+    private readonly int _ownProcessId = Environment.ProcessId;
+    private readonly Win32.WinEventProc _foregroundCallback; // kept alive for the native hooks
+    private readonly Win32.WinEventProc _layoutCallback;
+    private readonly IntPtr _foregroundHook;
+    private readonly IntPtr _moveSizeHook;
+    private readonly IntPtr _minimizeHook;
     private readonly DispatcherTimer _timer;
 
-    public FullscreenWatcher(Func<IntPtr> ownWindow)
+    /// <param name="ownWindow">The island window, which never counts as "in front".</param>
+    /// <param name="islandZone">Where the floating island lives on screen (physical pixels), or null when it isn't above the taskbar.</param>
+    public FullscreenWatcher(Func<IntPtr> ownWindow, Func<Win32.RECT?> islandZone)
     {
         _ownWindow = ownWindow;
-        _callback = (_, _, _, _, _, _, _) =>
+        _islandZone = islandZone;
+
+        _foregroundCallback = (_, _, _, _, _, _, _) =>
         {
             Check();
             ForegroundChanged?.Invoke();
         };
-        _hook = Win32.SetWinEventHook(Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND,
-            IntPtr.Zero, _callback, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
+        _layoutCallback = (_, _, _, _, _, _, _) => Check();
 
-        _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
+        _foregroundHook = Win32.SetWinEventHook(Win32.EVENT_SYSTEM_FOREGROUND, Win32.EVENT_SYSTEM_FOREGROUND,
+            IntPtr.Zero, _foregroundCallback, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
+        _moveSizeHook = Win32.SetWinEventHook(EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND,
+            IntPtr.Zero, _layoutCallback, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
+        _minimizeHook = Win32.SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND,
+            IntPtr.Zero, _layoutCallback, 0, 0, Win32.WINEVENT_OUTOFCONTEXT);
+
+        _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => Check();
         _timer.Start();
     }
 
     public bool IsFullscreen { get; private set; }
 
+    /// <summary>True when the window in front reaches the island's spot above the taskbar.</summary>
+    public bool IsIslandCovered { get; private set; }
+
     public event Action<bool>? Changed;
+
+    public event Action<bool>? CoverageChanged;
 
     /// <summary>Raised whenever another window comes to the front, so the island can re-assert topmost.</summary>
     public event Action? ForegroundChanged;
 
     public void Check()
     {
-        var fullscreen = Detect();
+        var fg = Win32.GetForegroundWindow();
+
+        // Our own windows (the island, its menus, the setup screen) and the shell (Start, taskbar,
+        // Alt+Tab) say nothing about what the user is working in, so keep the current state.
+        if (fg == IntPtr.Zero || fg == _ownWindow() || IsOwnProcess(fg) || ShellClasses.Contains(Win32.ClassName(fg)))
+        {
+            if (fg != IntPtr.Zero && Win32.ClassName(fg) is "Progman" or "WorkerW")
+            {
+                // Desktop in front: nothing covers the island.
+                Update(fullscreen: false, covered: false);
+            }
+
+            return;
+        }
+
+        var fullscreen = DetectFullscreen(fg);
+        var covered = !fullscreen && CoversIsland(fg);
+        Update(fullscreen, covered);
+    }
+
+    public void Dispose()
+    {
+        _timer.Stop();
+        foreach (var hook in new[] { _foregroundHook, _moveSizeHook, _minimizeHook })
+        {
+            if (hook != IntPtr.Zero)
+            {
+                Win32.UnhookWinEvent(hook);
+            }
+        }
+    }
+
+    private void Update(bool fullscreen, bool covered)
+    {
         if (fullscreen != IsFullscreen)
         {
             DebugLog.Write($"Fullscreen {fullscreen}");
             IsFullscreen = fullscreen;
             Changed?.Invoke(fullscreen);
         }
-    }
 
-    public void Dispose()
-    {
-        _timer.Stop();
-        if (_hook != IntPtr.Zero)
+        if (covered != IsIslandCovered)
         {
-            Win32.UnhookWinEvent(_hook);
+            DebugLog.Write($"Island covered {covered}");
+            IsIslandCovered = covered;
+            CoverageChanged?.Invoke(covered);
         }
     }
 
-    private bool Detect()
+    private bool DetectFullscreen(IntPtr fg)
     {
         if (Win32.SHQueryUserNotificationState(out var state) == 0 &&
             state is Win32.QUNS_RUNNING_D3D_FULL_SCREEN or Win32.QUNS_PRESENTATION_MODE)
@@ -68,19 +137,13 @@ internal sealed class FullscreenWatcher : IDisposable
         }
 
         // Borderless fullscreen (browser F11, video players, many games) covers its whole monitor.
-        var fg = Win32.GetForegroundWindow();
-        if (fg == IntPtr.Zero || fg == _ownWindow() || ShellClasses.Contains(Win32.ClassName(fg)))
-        {
-            return false;
-        }
-
-        if (!Win32.GetWindowRect(fg, out var rect))
+        if (!VisibleBounds(fg, out var rect))
         {
             return false;
         }
 
         var monitor = Win32.MonitorFromWindow(fg, Win32.MONITOR_DEFAULTTONEAREST);
-        var info = new Win32.MONITORINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Win32.MONITORINFO>() };
+        var info = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
         if (!Win32.GetMonitorInfo(monitor, ref info))
         {
             return false;
@@ -89,4 +152,41 @@ internal sealed class FullscreenWatcher : IDisposable
         var m = info.rcMonitor;
         return rect.Left <= m.Left && rect.Top <= m.Top && rect.Right >= m.Right && rect.Bottom >= m.Bottom;
     }
+
+    private bool CoversIsland(IntPtr fg)
+    {
+        if (_islandZone() is not { } zone || Win32.IsIconic(fg) || !Win32.IsWindowVisible(fg) || IsCloaked(fg))
+        {
+            return false;
+        }
+
+        return VisibleBounds(fg, out var r) &&
+               r.Left < zone.Right && r.Right > zone.Left && r.Top < zone.Bottom && r.Bottom > zone.Top;
+    }
+
+    /// <summary>The window's visible frame, without the invisible resize borders Windows adds around it.</summary>
+    private static bool VisibleBounds(IntPtr hwnd, out Win32.RECT rect)
+    {
+        if (DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out rect, Marshal.SizeOf<Win32.RECT>()) == 0)
+        {
+            return true;
+        }
+
+        return Win32.GetWindowRect(hwnd, out rect);
+    }
+
+    private static bool IsCloaked(IntPtr hwnd) =>
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0;
+
+    private bool IsOwnProcess(IntPtr hwnd)
+    {
+        Win32.GetWindowThreadProcessId(hwnd, out var pid);
+        return pid == _ownProcessId;
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out Win32.RECT value, int size);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
 }

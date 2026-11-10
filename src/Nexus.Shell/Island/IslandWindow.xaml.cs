@@ -86,7 +86,11 @@ public partial class IslandWindow : Window
         Bubble.MouseLeftButtonUp += (_, e) => { BubbleClicked?.Invoke(); e.Handled = true; };
 
         ContentClip.SizeChanged += (_, e) => UpdateClip(e.NewSize);
-        Surface.SizeChanged += (_, _) => SyncBackdrop();
+        Surface.SizeChanged += (_, _) =>
+        {
+            UpdateCorners();
+            SyncBackdrop();
+        };
         IsVisibleChanged += (_, _) => SyncBackdrop();
         CurrentHost.ChildSizeChanged += (_, _) => RefitToContent();
 
@@ -130,12 +134,28 @@ public partial class IslandWindow : Window
             return;
         }
 
-        var topLeft = Surface.PointToScreen(new Point(0, 0));
-        var bottomRight = Surface.PointToScreen(new Point(Surface.ActualWidth, Surface.ActualHeight));
+        // The blur window is moved on the UI thread while the island is drawn on the render thread, so
+        // it can trail a frame behind. During a size animation, give it the smaller of the current and
+        // final shape: then the lag always falls inside the island and blur never pokes out of its edges.
+        var w = Surface.ActualWidth;
+        var h = Surface.ActualHeight;
+        if (_animTarget is { } target)
+        {
+            w = Math.Min(w, target.Width);
+            h = Math.Min(h, target.Height);
+        }
+
+        // Keep it 1 px inside the island's border, so the antialiased edge never shows a blur halo.
+        const double inset = 1;
+        var left = _dock is not null ? inset : (Surface.ActualWidth - w) / 2 + inset;
+        var top = _anchorBottom ? Surface.ActualHeight - h + inset : 0;
+        var topLeft = Surface.PointToScreen(new Point(left, top));
+        var bottomRight = Surface.PointToScreen(new Point(left + w - inset * 2, top + h - inset * (_anchorBottom ? 2 : 1)));
+        var radius = Math.Max(1, Math.Min(h / 2, PanelRadius) - inset);
         _backdrop.Place(
             (int)Math.Round(topLeft.X), (int)Math.Round(topLeft.Y),
             (int)Math.Round(bottomRight.X - topLeft.X), (int)Math.Round(bottomRight.Y - topLeft.Y),
-            _hwnd, smallCorners: _shape == SurfaceShape.Resting);
+            _hwnd, radius: (int)Math.Round(radius * _scale), squareTop: !_anchorBottom);
     }
 
     private void KeepBackdropSynced(TimeSpan duration)
@@ -231,7 +251,8 @@ public partial class IslandWindow : Window
         }
 
         SetAttention(scene.Attention);
-        SetBubble(scene.Shape == SurfaceShape.Pill ? scene.Bubble : null, reduced);
+        _sceneBubble = scene.Bubble;
+        SetBubble(scene.Shape == SurfaceShape.Pill && _dock is null ? scene.Bubble : null, reduced); // no room for a bubble in the taskbar
         _shape = scene.Shape;
         KeepBackdropSynced(TimeSpan.FromMilliseconds(450));
     }
@@ -365,10 +386,27 @@ public partial class IslandWindow : Window
         SetAnchor(bottom);
 
         var scale = Win32.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 ? dpiX / 96.0 : 1.0;
+        _scale = scale;
         var width = (int)Math.Round(Width * scale);
         var height = (int)Math.Round(_extent * scale);
         var x = info.rcMonitor.Left + (info.rcMonitor.Width - width) / 2;
         var y = bottom ? bar.rc.Top - height : info.rcWork.Top;
+
+        // Where the floating island lives, so the watcher can tell when a window reaches it.
+        var centerX = info.rcMonitor.Left + info.rcMonitor.Width / 2;
+        var half = (int)(200 * scale);
+        _floatingZone = bottom
+            ? new Win32.RECT { Left = centerX - half, Right = centerX + half, Top = bar.rc.Top - (int)(46 * scale), Bottom = bar.rc.Top }
+            : null;
+
+        if (bottom && _dock is { } gap)
+        {
+            // Docked: the island sits in the empty part of the taskbar, vertically centered on it,
+            // left-aligned in the gap; panels open upward and to the right from there.
+            var pillBottom = gap.CenterY + (int)Math.Round(16 * scale);
+            x = gap.Left + (int)Math.Round(4 * scale);
+            y = pillBottom + (int)Math.Round(StageGap * scale) - height;
+        }
 
         Win32.SetWindowPos(_hwnd, Win32.HWND_TOPMOST, x, y, width, height, Win32.SWP_NOACTIVATE | Win32.SWP_NOOWNERZORDER);
 
@@ -381,6 +419,93 @@ public partial class IslandWindow : Window
         DebugLog.Write($"Reposition took {watch.Elapsed.TotalMilliseconds:N1} ms");
         KeepBackdropSynced(TimeSpan.FromMilliseconds(100));
     }
+
+    // ------------------------------------------------------------------ Docking into the taskbar
+
+    private TaskbarGap? _dock;
+    private Win32.RECT? _floatingZone;
+    private double _scale = 1;
+    private FrameworkElement? _sceneBubble;
+
+    private static readonly Brush OverflowFade = Freeze(new LinearGradientBrush(
+        new GradientStopCollection
+        {
+            new(Colors.Black, 0),
+            new(Colors.Black, 0.8),
+            new(Colors.Transparent, 1),
+        },
+        new Point(0, 0), new Point(1, 0)));
+
+    /// <summary>The floating island's spot on screen (physical pixels), or null when it isn't above the taskbar.</summary>
+    internal Win32.RECT? FloatingZone => _floatingZone;
+
+    /// <summary>True while the island is tucked into the taskbar.</summary>
+    public bool IsDocked => _dock is not null;
+
+    /// <summary>Display scale of the island's monitor (1.25 at 125%).</summary>
+    public double ScaleFactor => _scale;
+
+    /// <summary>
+    /// Tucks the island into a free stretch of the taskbar, or brings it back above the taskbar (null).
+    /// Switching between the two sinks the island into the taskbar and rises it in its new place.
+    /// </summary>
+    internal void Dock(TaskbarGap? gap)
+    {
+        if (gap is null && _dock is null)
+        {
+            return;
+        }
+
+        if (gap is { } g && _dock is { } d && Math.Abs(g.Left - d.Left) <= 4 && Math.Abs(g.Width - d.Width) <= 8)
+        {
+            return; // same place
+        }
+
+        DebugLog.Write(gap is { } dock ? $"Dock into {dock.Left}-{dock.Right}" : "Undock");
+        var switching = (gap is null) != (_dock is null);
+
+        void Apply()
+        {
+            _dock = gap;
+            ApplyDockLayout();
+            Reposition();
+        }
+
+        if (switching && IsVisible && Stage.Opacity > 0.5 && !Motion.Reduced)
+        {
+            Sink(() =>
+            {
+                Apply();
+                Rise();
+            });
+        }
+        else
+        {
+            Apply();
+        }
+    }
+
+    private void ApplyDockLayout()
+    {
+        var docked = _dock is not null;
+
+        // Docked: left-aligned in the gap. Floating: centered on the screen.
+        Stage.ColumnDefinitions[0].Width = docked ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        CurrentHost.AnchorLeft = docked;
+        OutgoingHost.AnchorLeft = docked;
+
+        ApplyShape(_shape, reduced: true);
+        SetBubble(docked || _shape != SurfaceShape.Pill ? null : _sceneBubble, reduced: true);
+
+        if (_current is not null || _shape == SurfaceShape.Resting)
+        {
+            var target = TargetSize(new Scene(_shape, _current));
+            AnimateSize(target, growing: true, reduced: true);
+        }
+    }
+
+    /// <summary>Width available to the compact island inside the taskbar gap, in DIPs.</summary>
+    private double DockedMaxWidth => _dock is { } gap ? Math.Max(60, (gap.Width - 8 * _scale) / _scale) : double.PositiveInfinity;
 
     public void EnsureTopmost()
     {
@@ -431,7 +556,9 @@ public partial class IslandWindow : Window
         _anchorBottom = bottom;
         var v = bottom ? VerticalAlignment.Bottom : VerticalAlignment.Top;
         Stage.VerticalAlignment = v;
-        Stage.Margin = bottom ? new Thickness(0, 0, 0, 8) : new Thickness(0, 8, 0, 0);
+        // Above the taskbar the island floats 8 px clear of it. At the top it hangs flush from the
+        // screen edge, like a MacBook's notch, and grows downward from there.
+        Stage.Margin = bottom ? new Thickness(0, 0, 0, StageGap) : new Thickness(0);
         HitArea.VerticalAlignment = v;
         Surface.VerticalAlignment = v;
         Bubble.VerticalAlignment = v;
@@ -444,7 +571,8 @@ public partial class IslandWindow : Window
     {
         if (scene.Shape == SurfaceShape.Resting || scene.Content is null)
         {
-            return RestingSize;
+            ContentClip.OpacityMask = null;
+            return new Size(Math.Min(RestingSize.Width, DockedMaxWidth), RestingSize.Height);
         }
 
         scene.Content.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -456,7 +584,19 @@ public partial class IslandWindow : Window
             _ => Math.Min(Math.Ceiling(d.Height), 480),
         };
 
-        return new Size(Math.Ceiling(d.Width), height);
+        var width = Math.Ceiling(d.Width);
+        if (scene.Shape == SurfaceShape.Pill && width > DockedMaxWidth)
+        {
+            // Docked in a narrow gap: keep the start of the pill and fade out what doesn't fit.
+            width = Math.Floor(DockedMaxWidth);
+            ContentClip.OpacityMask = OverflowFade;
+        }
+        else
+        {
+            ContentClip.OpacityMask = null;
+        }
+
+        return new Size(width, height);
     }
 
     /// <summary>The content changed size on its own (new track title, new agent detail): follow it.</summary>
@@ -474,34 +614,42 @@ public partial class IslandWindow : Window
         }
 
         DebugLog.Write($"Refit to {target} from {Surface.Width}x{Surface.Height}");
-        AnimateSize(target, growing: true, Motion.Reduced);
+        AnimateSize(target, growing: true, Motion.Reduced, lively: false);
     }
 
     private void ApplyShape(SurfaceShape shape, bool reduced)
     {
         var resting = shape == SurfaceShape.Resting;
-        var radius = resting ? RestingRadius : 8;
-        _clipRadius = radius;
-        SurfaceFill.CornerRadius = new CornerRadius(radius);
-        SurfaceFill.BorderThickness = new Thickness(1);
+
+        // Hanging from the top edge: no top border (it meets the screen edge).
+        var flushTop = !_anchorBottom;
+        SurfaceFill.BorderThickness = flushTop ? new Thickness(1, 0, 1, 1) : new Thickness(1);
+        AttentionEdge.BorderThickness = flushTop ? new Thickness(1.5, 0, 1.5, 1.5) : new Thickness(1.5);
+        PulseRing.BorderThickness = flushTop ? new Thickness(2, 0, 2, 2) : new Thickness(2);
+        PulseRing.RenderTransformOrigin = flushTop ? new Point(0.5, 0) : new Point(0.5, 0.5);
+        UpdateCorners();
         // A faint, translucent edge like Windows' own flyouts; the blurred backdrop does the rest.
         SurfaceFill.SetResourceReference(Border.BorderBrushProperty, "Brush.StrokeAcrylic");
 
         // The resting line is small, so its hit area is much larger than what is drawn: wide, tall,
         // and reaching all the way down to the taskbar edge so there is no dead gap below it.
+        var docked = _dock is not null;
         HitArea.Background = resting ? HitBrush : Brushes.Transparent;
         HitArea.Padding = resting
-            ? (_anchorBottom ? new Thickness(32, 18, 32, StageGap) : new Thickness(32, StageGap, 32, 18))
+            ? (_anchorBottom ? new Thickness(docked ? 0 : 32, 18, 32, StageGap) : new Thickness(32, 0, 32, 18))
             : new Thickness(0);
-        HitArea.Margin = resting
-            ? (_anchorBottom ? new Thickness(0, 0, 0, -StageGap) : new Thickness(0, -StageGap, 0, 0))
-            : new Thickness(0);
+        // At the top the hit area already starts at the screen edge, so flicking the pointer up works.
+        HitArea.Margin = resting && _anchorBottom ? new Thickness(0, 0, 0, -StageGap) : new Thickness(0);
         HitArea.Cursor = resting ? Cursors.Hand : null;
-        UpdateClip(ContentClip.RenderSize);
+
+        // Docked, the island is laid out for the 32 px pill centered on the taskbar; lift the thinner
+        // resting line so it is centered too.
+        HitArea.RenderTransform = docked && resting ? new TranslateTransform(0, -(32 - RestingSize.Height) / 2) : Transform.Identity;
 
         // Fluent Shadow 08 under the compact island, Shadow 28 under the expanded panel.
+        // Docked in the taskbar, the compact island sits flat on it with no shadow.
         var large = shape is SurfaceShape.Panel or SurfaceShape.Banner;
-        Shadow.Radius = radius;
+        var strength = large ? 0.44 : docked ? 0 : 0.28;
         if (reduced)
         {
             Shadow.BeginAnimation(SoftShadow.BlurProperty, null);
@@ -509,18 +657,45 @@ public partial class IslandWindow : Window
             Shadow.BeginAnimation(SoftShadow.StrengthProperty, null);
             Shadow.Blur = large ? 28 : 8;
             Shadow.OffsetY = large ? 14 : 4;
-            Shadow.Strength = large ? 0.44 : 0.28;
+            Shadow.Strength = strength;
             return;
         }
 
         Shadow.BeginAnimation(SoftShadow.BlurProperty, Motion.To(large ? 28 : 8, Motion.Expand));
         Shadow.BeginAnimation(SoftShadow.OffsetYProperty, Motion.To(large ? 14 : 4, Motion.Expand));
-        Shadow.BeginAnimation(SoftShadow.StrengthProperty, Motion.To(large ? 0.44 : 0.28, Motion.Expand));
+        Shadow.BeginAnimation(SoftShadow.StrengthProperty, Motion.To(strength, Motion.Expand));
     }
 
-    private void AnimateSize(Size target, bool growing, bool reduced)
+    /// <summary>
+    /// Fluent's overlay radius: 8 px on the pill, banner and panels (Windows 11 geometry). Only shapes
+    /// shorter than 16 px (the 10 px resting line) use half their height. The radius follows the live
+    /// height, so morphing from the line to the pill never jumps.
+    /// </summary>
+    private void UpdateCorners()
+    {
+        var h = Surface.ActualHeight > 0 ? Surface.ActualHeight : Surface.Height;
+        var radius = Math.Max(2, Math.Min(h / 2, PanelRadius));
+        _clipRadius = radius;
+
+        var flushTop = !_anchorBottom;
+        var corners = flushTop ? new CornerRadius(0, 0, radius, radius) : new CornerRadius(radius);
+        SurfaceFill.CornerRadius = corners;
+        AttentionEdge.CornerRadius = corners;
+        PulseRing.CornerRadius = flushTop ? new CornerRadius(0, 0, radius + 2, radius + 2) : new CornerRadius(radius + 2);
+        Shadow.Radius = radius;
+        UpdateClip(ContentClip.RenderSize);
+    }
+
+    /// <summary>Fluent 2 overlay radius (radius/overlay token).</summary>
+    private const double PanelRadius = 8;
+
+    /// <summary>Final size of the running size animation, so the blur never trails outside the shape.</summary>
+    private Size? _animTarget;
+
+    private void AnimateSize(Size target, bool growing, bool reduced, bool lively = true)
     {
         var token = ++_sizeToken;
+        _animTarget = reduced ? null : target;
 
         // Make room first; the window never needs to be taller than what is on screen.
         FitWindow(Math.Max(target.Height, Surface.Height), allowShrink: false);
@@ -537,14 +712,18 @@ public partial class IslandWindow : Window
 
         // Expand: the island's own shape grows into the panel on a spring.
         // Collapse: 167 ms, after the content has started fading out.
-        var duration = growing ? Motion.Expand : Motion.Collapse;
-        var ease = growing ? Motion.Spring : Motion.Standard;
+        // Opening into something new is lively (a small springy overshoot, like the Dynamic Island);
+        // following content that changed size on its own (a new song title) is calm, so it doesn't draw the eye.
+        var duration = growing ? (lively ? Motion.Expand : TimeSpan.FromMilliseconds(260)) : Motion.Collapse;
+        var ease = growing ? (lively ? Motion.Bouncy : Motion.Spring) : Motion.Standard;
         var delay = growing ? TimeSpan.Zero : TimeSpan.FromMilliseconds(40);
         var height = Motion.To(target.Height, duration, ease, delay);
         height.Completed += (_, _) =>
         {
             if (token == _sizeToken)
             {
+                _animTarget = null;
+                SyncBackdrop();
                 // Shrink the window back once the shape has settled (after the pulse ring has faded).
                 Dispatcher.BeginInvoke(() => { if (token == _sizeToken) FitWindow(target.Height, allowShrink: true); },
                     DispatcherPriority.Background);
@@ -590,6 +769,22 @@ public partial class IslandWindow : Window
             var delay = reduced ? TimeSpan.Zero : growing ? Motion.ContentInDelay : TimeSpan.FromMilliseconds(120);
             var duration = reduced ? Motion.ReducedCrossfade : Motion.ContentIn;
             next.BeginAnimation(OpacityProperty, Motion.To(1, duration, Motion.Decelerate, delay));
+
+            // New content blooms in: it grows from 96% to exactly full size from its centre as it fades
+            // in. No overshoot, so text never spills past the island's edge.
+            if (!reduced)
+            {
+                var bloom = new ScaleTransform(0.96, 0.96);
+                next.RenderTransformOrigin = new Point(0.5, 0.5);
+                next.RenderTransform = bloom;
+                var grow = Motion.To(1, duration + TimeSpan.FromMilliseconds(80), Motion.Decelerate, delay);
+                bloom.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
+                bloom.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+            }
+            else
+            {
+                next.RenderTransform = Transform.Identity;
+            }
         }
     }
 
@@ -635,8 +830,30 @@ public partial class IslandWindow : Window
         Bubble.BeginAnimation(OpacityProperty, Motion.To(1, duration, Motion.Decelerate, reduced ? null : TimeSpan.FromMilliseconds(100)));
     }
 
-    private void UpdateClip(Size size) =>
-        ContentClip.Clip = new RectangleGeometry(new Rect(size), _clipRadius, _clipRadius);
+    private void UpdateClip(Size size)
+    {
+        if (_anchorBottom || size.Width <= 0 || size.Height <= 0)
+        {
+            ContentClip.Clip = new RectangleGeometry(new Rect(size), _clipRadius, _clipRadius);
+            return;
+        }
+
+        // Flush with the top edge: only the bottom corners are rounded.
+        var r = Math.Min(_clipRadius, Math.Min(size.Width, size.Height) / 2);
+        var g = new StreamGeometry();
+        using (var ctx = g.Open())
+        {
+            ctx.BeginFigure(new Point(0, 0), true, true);
+            ctx.LineTo(new Point(size.Width, 0), false, false);
+            ctx.LineTo(new Point(size.Width, size.Height - r), false, false);
+            ctx.ArcTo(new Point(size.Width - r, size.Height), new Size(r, r), 0, false, SweepDirection.Clockwise, false, false);
+            ctx.LineTo(new Point(r, size.Height), false, false);
+            ctx.ArcTo(new Point(0, size.Height - r), new Size(r, r), 0, false, SweepDirection.Clockwise, false, false);
+        }
+
+        g.Freeze();
+        ContentClip.Clip = g;
+    }
 
     private static void Detach(FrameworkElement element)
     {

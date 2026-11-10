@@ -56,9 +56,12 @@ internal sealed class SystemTheme
         // Over a blurred backdrop the island is a translucent tint, so the colors behind show through
         // softly, like the Start menu. Without blur it is nearly opaque (text over sharp, unblurred
         // content would be hard to read), and solid when transparency effects are off.
+        // Windows' own dark acrylic look: a charcoal (#141414, Fluent Neutral Background) tint over the
+        // blurred desktop, so colours behind the island show through softly, like the Start menu.
         resources["Brush.Island"] = new SolidColorBrush(!TransparencyEnabled
             ? Color.FromRgb(0x1F, 0x1F, 0x1F)
             : Color.FromArgb(IslandAlpha(_backdrop), 0x14, 0x14, 0x14));
+        resources["Brush.IslandOpaque"] = new SolidColorBrush(Color.FromArgb(0xF7, 0x14, 0x14, 0x14));
     }
 
     private Backdrop.Kind _backdrop = Backdrop.Kind.None;

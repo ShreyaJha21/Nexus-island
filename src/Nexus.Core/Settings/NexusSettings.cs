@@ -13,7 +13,15 @@ public enum Placement
 /// <summary>Everything Nexus remembers. Stored as JSON in %AppData%\Nexus; no account, no cloud.</summary>
 public sealed class NexusSettings
 {
+    /// <summary>Floating just above the taskbar by default; top-centre (hanging from the top edge) is an option.</summary>
     public Placement Placement { get; set; } = Placement.AboveTaskbar;
+
+    /// <summary>
+    /// Opt-in: when a maximized or tall window reaches the island's spot above the taskbar, tuck the
+    /// island into empty taskbar space instead. Off by default, so the island always floats in the
+    /// middle above the taskbar.
+    /// </summary>
+    public bool DockOverApps { get; set; }
 
     /// <summary>Hidden with the shortcut; remembered across restarts.</summary>
     public bool Hidden { get; set; }

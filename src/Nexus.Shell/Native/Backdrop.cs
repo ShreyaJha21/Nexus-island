@@ -23,6 +23,7 @@ internal sealed class Backdrop : IDisposable
     private readonly IntPtr _hwnd;
     private bool _visible;
     private int _lastCorner = -1;
+    private (int, int, int, bool) _lastShape;
 
     private Backdrop(IntPtr hwnd, Kind kind)
     {
@@ -86,8 +87,12 @@ internal sealed class Backdrop : IDisposable
         return new Backdrop(hwnd, kind);
     }
 
-    /// <summary>Places the blur at a screen rectangle (physical pixels) directly beneath <paramref name="above"/>.</summary>
-    public void Place(int x, int y, int width, int height, IntPtr above, bool smallCorners)
+    /// <summary>
+    /// Places the blur at a screen rectangle (physical pixels) directly beneath <paramref name="above"/>,
+    /// shaped to match the island exactly: rounded corners of <paramref name="radius"/> pixels, or only
+    /// the bottom corners rounded when the island hangs from the top edge.
+    /// </summary>
+    public void Place(int x, int y, int width, int height, IntPtr above, int radius, bool squareTop)
     {
         if (width <= 0 || height <= 0)
         {
@@ -95,12 +100,27 @@ internal sealed class Backdrop : IDisposable
             return;
         }
 
-        // Windows 11 rounds the window: 8 px for the island and panels, 4 px for the thin resting line.
-        var corner = smallCorners ? DWMWCP_ROUNDSMALL : DWMWCP_ROUND;
-        if (corner != _lastCorner)
+        if (_lastCorner != DWMWCP_DONOTROUND)
         {
-            Win32.DwmSetWindowAttribute(_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
-            _lastCorner = corner;
+            var none = DWMWCP_DONOTROUND; // our own region does the rounding
+            Win32.DwmSetWindowAttribute(_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref none, sizeof(int));
+            _lastCorner = DWMWCP_DONOTROUND;
+        }
+
+        var shape = (width, height, radius, squareTop);
+        if (shape != _lastShape)
+        {
+            var d = Math.Max(0, radius * 2);
+            var region = CreateRoundRectRgn(0, 0, width + 1, height + 1, d, d);
+            if (squareTop)
+            {
+                var top = CreateRectRgn(0, 0, width, Math.Max(1, height / 2));
+                CombineRgn(region, region, top, RGN_OR);
+                DeleteObject(top);
+            }
+
+            SetWindowRgn(_hwnd, region, true); // Windows owns the region from here
+            _lastShape = shape;
         }
 
         // Insert after the island window, so it sits directly beneath it and stays topmost.
@@ -173,8 +193,8 @@ internal sealed class Backdrop : IDisposable
     private const int ERROR_CLASS_ALREADY_EXISTS = 1410;
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMWA_BORDER_COLOR = 34;
-    private const int DWMWCP_ROUND = 2;
-    private const int DWMWCP_ROUNDSMALL = 3;
+    private const int DWMWCP_DONOTROUND = 1;
+    private const int RGN_OR = 2;
     private const int WCA_ACCENT_POLICY = 19;
     private const int ACCENT_ENABLE_BLURBEHIND = 3;
 
@@ -236,6 +256,21 @@ internal sealed class Backdrop : IDisposable
 
     [DllImport("gdi32.dll")]
     private static extern IntPtr GetStockObject(int obj);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int widthEllipse, int heightEllipse);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+
+    [DllImport("gdi32.dll")]
+    private static extern int CombineRgn(IntPtr dest, IntPtr src1, IntPtr src2, int mode);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr obj);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, [MarshalAs(UnmanagedType.Bool)] bool redraw);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string? name);

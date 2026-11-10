@@ -22,22 +22,28 @@ public sealed class MusicMode : IslandMode
     private static readonly TimeSpan PausedGrace = TimeSpan.FromSeconds(60);
 
     private readonly NexusSettings _settings;
+    private readonly Func<string, string, string?>? _siteResolver;
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _progressTick;
     private readonly DispatcherTimer _graceTimer;
     private MediaSessionManager? _manager;
     private MediaSession? _session;
     private string _trackKey = "";
-    private bool _userSkipped;
     private DateTimeOffset _pausedAt;
 
     private TimeSpan _position;
     private TimeSpan _duration;
     private DateTimeOffset _positionUpdatedAt;
 
-    public MusicMode(NexusSettings settings)
+    /// <param name="siteResolver">
+    /// For browser playback: given the browser's app id and the track title, returns the site playing it
+    /// ("youtube", "youtubemusic", "spotify", "soundcloud") or null. Windows' media session only says a
+    /// browser is playing, so the shell answers this from the browser's window titles.
+    /// </param>
+    public MusicMode(NexusSettings settings, Func<string, string, string?>? siteResolver = null)
     {
         _settings = settings;
+        _siteResolver = siteResolver;
         _dispatcher = Dispatcher.CurrentDispatcher;
         _progressTick = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
         _progressTick.Tick += (_, _) => RaiseProgress();
@@ -50,7 +56,6 @@ public sealed class MusicMode : IslandMode
 
         PreviousCommand = new RelayCommand(async () =>
         {
-            _userSkipped = true;
             if (_session is not null) await _session.TrySkipPreviousAsync();
         });
         PlayPauseCommand = new RelayCommand(async () =>
@@ -59,7 +64,6 @@ public sealed class MusicMode : IslandMode
         });
         NextCommand = new RelayCommand(async () =>
         {
-            _userSkipped = true;
             if (_session is not null) await _session.TrySkipNextAsync();
         });
     }
@@ -79,6 +83,12 @@ public sealed class MusicMode : IslandMode
     public bool HasArt => AlbumArt is not null;
     public bool IsPlaying { get; private set; }
     public bool HasArtist => !string.IsNullOrWhiteSpace(Artist);
+
+    /// <summary>The playing service's brand colour for the level meter, or null for the accent colour.</summary>
+    public Brush? BrandBrush { get; private set; }
+
+    /// <summary>"YouTube", "Spotify"… or null when the service isn't recognised.</summary>
+    public string? ServiceName { get; private set; }
 
     public string PlayPauseIcon => IsPlaying ? "pause" : "play";
     public string PlayPauseLabel => IsPlaying ? "Pause" : "Play";
@@ -153,6 +163,7 @@ public sealed class MusicMode : IslandMode
 
         AppId = _session.SourceAppUserModelId ?? "";
         SourceText = $"Playing in {FriendlyAppName(AppId)}";
+        _trackKey = ""; // re-resolve the service for the new session
         _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
         _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
         _session.TimelinePropertiesChanged += OnTimelineChanged;
@@ -195,17 +206,17 @@ public sealed class MusicMode : IslandMode
         Title = props.Title ?? "";
         Artist = string.IsNullOrWhiteSpace(props.Artist) ? props.AlbumArtist ?? "" : props.Artist;
         AlbumArt = changed || AlbumArt is null ? await LoadArtAsync(props) : AlbumArt;
+        if (changed)
+        {
+            ResolveBrand();
+        }
+
         OnAllPropertiesChanged();
         UpdateActivity();
 
-        // A track change expands briefly, unless the user just pressed next/previous here,
-        // the app is excluded, or this is the first read after attaching.
-        if (changed && !initial && IsPlaying && !string.IsNullOrWhiteSpace(Title) && !_userSkipped && !IsExcluded(AppId))
-        {
-            RequestMoment(MomentKind.Panel);
-        }
-
-        _userSkipped = false;
+        // A new song updates the pill in place. It no longer expands the island on its own: in a
+        // playlist that happened every few minutes and pulled the eye away from work.
+        _ = initial;
     }
 
     private void ReadPlaybackInfo(MediaSession session)
@@ -284,8 +295,43 @@ public sealed class MusicMode : IslandMode
         OnPropertyChanged(nameof(HasTimeline));
     }
 
-    private bool IsExcluded(string appId) =>
-        _settings.Music.ExcludedApps.Any(x => !string.IsNullOrWhiteSpace(x) && appId.Contains(x, StringComparison.OrdinalIgnoreCase));
+    /// <summary>Works out which service is playing and picks its brand colour for the level meter.</summary>
+    private void ResolveBrand()
+    {
+        var id = AppId.ToLowerInvariant();
+        var site =
+            id.Contains("spotify") ? "spotify" :
+            id.Contains("applemusic") || id.Contains("apple music") ? "applemusic" :
+            IsBrowser(id) ? _siteResolver?.Invoke(AppId, Title) : null;
+
+        (ServiceName, var hex) = site switch
+        {
+            "youtube" => ("YouTube", "#FF0000"),
+            "youtubemusic" => ("YouTube Music", "#FF0000"),
+            "spotify" => ("Spotify", "#1DB954"),
+            "applemusic" => ("Apple Music", "#FA2D48"),
+            "soundcloud" => ("SoundCloud", "#FF5500"),
+            _ => ((string?)null, (string?)null),
+        };
+
+        if (hex is null)
+        {
+            BrandBrush = null;
+        }
+        else
+        {
+            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+            brush.Freeze();
+            BrandBrush = brush;
+        }
+
+        SourceText = ServiceName is { } name ? $"Playing on {name}" : $"Playing in {FriendlyAppName(AppId)}";
+    }
+
+    private static bool IsBrowser(string id) =>
+        id.Contains("chrome") || id.Contains("msedge") || id.Contains("firefox") || id.Contains("brave") ||
+        id.Contains("opera") || id.Contains("vivaldi") || id.Contains("arc") || id == "308046b0af4a39cb";
+
 
     private static async Task<ImageSource?> LoadArtAsync(GlobalSystemMediaTransportControlsSessionMediaProperties props)
     {

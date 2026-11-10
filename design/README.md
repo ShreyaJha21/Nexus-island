@@ -12,8 +12,8 @@ flows and settings.
   `src/Nexus.Shell/Island/Motion.cs`.
 
 The **Island · as built (v0.1)** section on the canvas shows the shipping look: floating in the middle above
-the taskbar (the default), plus two optional settings: docking into the taskbar over maximized apps, and
-top-centre placement (hanging flush from the screen edge with square top corners).
+the taskbar (the default), tucked into the taskbar, and top-centre placement (hanging flush from the
+screen edge with square top corners).
 
 Where the build differs from the file:
 
@@ -26,6 +26,14 @@ Where the build differs from the file:
   play/pause and next buttons, and the level meter takes the service's brand colour (YouTube and YouTube
   Music red, Spotify green, Apple Music pink, SoundCloud orange; your accent colour otherwise). For browser
   playback the service is read from the browser's window titles.
+
+- **Smart workspace awareness** is built but not yet drawn in the file. The island has six positions
+  (bottom centre, bottom left, bottom right, top centre, inside the taskbar, and wherever it was dragged)
+  and three ways to respond when the app in front has controls under it: move to a clear spot, hide, or
+  stay put. Moving between floating spots is a 420 ms glide on the Rise spring; going into or out of the
+  taskbar or the top edge, where the shape changes, it sinks and rises instead. Compact shows an activity
+  as the resting line and reveals the pill on hover. The states to draw: default, expanded, compact,
+  repositioning, hidden, and a notification opening from a moved spot.
 
 - `surface/island` is `#141414` at 72% over a blur-behind backdrop rather than 92% over the 60 px Fluent
   acrylic, because Windows' acrylic goes flat grey on windows that never activate. Without blur it is 97%.

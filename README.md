@@ -4,10 +4,10 @@
 taskbar and shows one thing at a time: your focus timer, a Claude Code agent that needs you, or the music
 that's playing. It stays quiet otherwise.
 
-- **Taskbar-anchored.** Floats in the middle of the screen, just above the taskbar, so it never covers tabs
-  or title bars. Two optional settings: `"DockOverApps": true` tucks it into empty taskbar space when a
-  maximized app would be covered, and tray menu → *Move to top center* hangs it from the top edge of the
-  screen, like a MacBook's notch.
+- **Out of your way.** Floats in the middle of the screen, just above the taskbar. When the app in front
+  has a toolbar, text box or status bar where the island sits (Figma's bottom toolbar, for one), it glides
+  to a clear spot and comes back when the conflict is gone. You can also drag it anywhere, pick another
+  spot, or have it hide or stay compact instead. See [Staying out of the way](#staying-out-of-the-way).
 - **Context-aware.** A fixed priority ladder decides what shows. The next activity becomes a 32 px bubble,
   the rest a `+N` chip. A focus session turns everything below it into dots (Focus Guard).
 - **Fluent-native.** Fluent 2 tokens, Segoe UI Variable, the Windows accent colour, 8 px corners and
@@ -20,11 +20,12 @@ Design: [Nexus Figma file](https://www.figma.com/design/qYAkTFWMdY8sChyhQeVNjX/N
 | Area | Status |
 |---|---|
 | Taskbar placement, rise/sink, expand/collapse motion, reduced motion | ✅ |
+| Smart positioning: collision detection, safe spots, per-app rules, drag to move, auto-hide, always compact | ✅ |
 | Priority engine, Focus Guard, bubble and `+N` chip, scroll to cycle, pin, pause 1 h, "Why am I seeing this?" | ✅ |
 | Idle: resting line, hover peek, launcher | ✅ |
 | F1 Focus timer (25/5, 50/10, custom), session-done banner, break | ✅ |
 | F3 Agent status for Claude Code (working, needs you, done, failed, several sessions) | ✅ |
-| F4 Music (any app that reports to Windows media controls) | ✅ |
+| F4 Music (any app that reports to Windows media controls), level bars in the service's colour | ✅ |
 | F6 Show/hide shortcut, hide for 1 h / until tomorrow, auto-hide over fullscreen apps | ✅ |
 | Tray menu, start with Windows | ✅ |
 | Cricket, Swatch, Calendar, system HUDs, settings UI, onboarding, installer | v1 (shown as disabled tiles in the launcher) |
@@ -51,6 +52,8 @@ dotnet test
 | Click the island | Open the current mode's panel, or the launcher when nothing is active |
 | Scroll on the island | Switch between active modes |
 | Right-click the island | Pin or pause a mode, see why it's showing, hide Nexus |
+| Drag the island | Move it anywhere; it remembers the spot. Drop it near the bottom centre to snap back |
+| Right-click → *Position…* (also in the tray menu) | Choose a spot, what happens when an app is in the way, dragging, always compact |
 | `Ctrl+Alt+Space` | Hide or show Nexus (configurable) |
 | `Ctrl+Alt+F` | Start or stop a focus session (configurable) |
 | `Esc`, click away, or 8 s without the pointer | Close a panel |
@@ -58,6 +61,64 @@ dotnet test
 If another app already owns a shortcut, Nexus says so in a tray notification. Change it in the settings file
 (`%AppData%\Nexus\settings.json`, also under tray menu → *Open settings file*), for example
 `"HideShortcut": "Ctrl+Alt+J"`, then restart Nexus.
+
+### Staying out of the way
+
+Nexus watches which app is in front and where its window is. The island has a preferred spot (bottom
+centre unless you chose or dragged another). What it does when that app has controls there is the mode
+under *Position…*:
+
+| Mode | What the island does |
+|---|---|
+| **Move out of the way of apps** (default) | Glides to the first clear spot and returns when the conflict is gone. If nowhere is clear it stays, but as a thin line. |
+| **Hide when an app covers it** | Hides while a window covers its spot. "Needs you" and a click on the tray icon still bring it out. |
+| **Always stay put** | Never moves. |
+
+How it decides a spot is taken, in this order:
+
+1. **Window bounds.** A window that doesn't reach the island's spot can't be in the way.
+2. **Rules per app**, in the settings file. Figma ships with one: its toolbar sits at the bottom centre, so
+   the island goes to the bottom right there. A rule is the whole truth for its app.
+3. **UI Automation.** For every other app, Nexus asks Windows which buttons, toolbars, text boxes, tabs,
+   menus and scroll bars lie under the island. Scrollable content (text, lists, links) doesn't count.
+
+Web browsers never move it: pages scroll under the island and their controls change with every site, so it
+would just jump around (*Stay put in browsers* under *Position…*). Figma in a browser tab still follows the
+Figma rule. It checks when you switch apps or move a window, not continuously, so the island doesn't wander
+while you scroll. If you drag it somewhere while an app is in front, it stays there for that app. It never moves
+while a panel is open.
+
+**Always compact** keeps activities as the thin line: point at it to see the pill, click to open the panel.
+Nothing opens on its own except "needs you".
+
+All of it lives under `Positioning` in the settings file. A fuller example than the defaults:
+
+```json
+"Placement": "AboveTaskbar",
+"Positioning": {
+  "Mode": "Smart",
+  "Draggable": true,
+  "AlwaysCompact": false,
+  "StayInBrowsers": true,
+  "DetectControls": true,
+  "SafeSpots": ["BottomRight", "BottomLeft", "Taskbar"],
+  "CompactHours": ["09:30-12:00"],
+  "Apps": {
+    "Figma": { "Avoid": ["AboveTaskbar"], "MoveTo": "BottomRight" },
+    "Code": { "Compact": true },
+    "Photoshop": { "Hide": true }
+  }
+}
+```
+
+- Spots: `AboveTaskbar` (bottom centre), `BottomLeft`, `BottomRight`, `TopCenter`, `Taskbar` (free space
+  inside the taskbar) and `Custom` (where you dragged it).
+- `Mode`: `Smart`, `AutoHide` or `Fixed`. `SafeSpots` are tried in order.
+- `Apps` is keyed by process name, or by the app name at the end of a browser tab's title ("File – Figma").
+  `Avoid` lists the spots the app uses, `MoveTo` is tried first, `Compact` and `Hide` apply while the app
+  is in front.
+- `CompactHours` are times of day to stay compact. `DetectControls: false` turns UI Automation off and
+  leaves only your rules.
 
 ### Connect Claude Code
 
@@ -70,12 +131,12 @@ shows only tool and file names, never file contents or prompts. Any agent can po
 ## How it's built
 
 ```
-src/Nexus.Core    Priority engine, focus timer, agent tracker, local event endpoint, hook installer, settings.
-                  No UI and no Windows APIs, so it is fast to unit test.
+src/Nexus.Core    Priority engine, focus timer, agent tracker, local event endpoint, hook installer, settings,
+                  and the smart-positioning decisions. No UI and no Windows APIs, so it is fast to unit test.
 src/Nexus.Modes   The modes (Focus, Music, Agent): state, compact pill, expanded panel, bubble, banner.
                   Also the Fluent theme and shared controls. Icons are drawn from design/icons.
 src/Nexus.Shell   The island window: placement, motion, the controller that applies the priority rules,
-                  shortcuts, tray, fullscreen detection, Claude Code setup.
+                  shortcuts, tray, fullscreen and collision detection, Claude Code setup.
 tests/            Unit tests for Nexus.Core.
 design/icons      Icons exported from the Figma file.
 docs/             The agent event format.
@@ -107,8 +168,22 @@ forces the reduced-motion crossfades.
   Very bright backgrounds lower the contrast of secondary text; `NEXUS_TINT=CC` (hex alpha) raises the tint.
 - **Resting line is larger than the Figma spec** (112 × 10 instead of 64 × 6) with a much larger hover and
   click area that reaches down to the taskbar, so it's easy to find and hit.
+- **Music colours.** The level bars take the playing service's colour: YouTube red, Spotify green, Apple
+  Music pink, SoundCloud orange. Windows only says *a browser* is playing, so Nexus finds the tab playing
+  the track by its title, in the window title or the browser's tab list (background tabs too). Spotify's web
+  player is recognised by its "song • artist" tab title. A site it can't recognise uses your accent colour.
+- **Claude's colour.** Claude Code's working and "needs you" states (icon, edge, pulse, button) use Claude's
+  coral. Done stays green and failed red, since those colours carry meaning. Other agents keep the accent
+  and attention colours.
 - **Accent colour follows Windows.** With a red or orange accent, primary buttons look red, and orange is
   also the "needs you" colour. Set `"UseSystemAccent": false` for Fluent blue.
+- **Collision detection is only as good as what apps tell Windows.** An app that doesn't describe its
+  controls to UI Automation looks clear; give it a rule. Chromium-based apps (browsers, VS Code, Electron
+  apps) answer only a moment after first being asked, so Nexus looks twice, about a second apart. Asking
+  also switches on their accessibility support, which costs them a little performance.
+- **Only the app in front counts**, and web pages are checked when you switch to the window, not on every
+  scroll or tab change.
+- **Rules and compact hours are JSON** for now, and a dragged position is one global spot, not one per app.
 - **Dark theme only** for now; light and high-contrast are planned.
 - Settings are edited as JSON until the Settings window lands in v1.
 

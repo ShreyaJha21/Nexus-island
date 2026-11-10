@@ -24,7 +24,7 @@
         </TextBlock>
         <Border Style="{StaticResource Chip}" Margin="8,0,0,0"
                 Visibility="{Binding ShowNeedsYouChip, Converter={StaticResource BoolToVisibility}}">
-            <TextBlock Text="{Binding NeedsYouChip}" Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.Attention}" />
+            <TextBlock Text="{Binding NeedsYouChip}" Style="{StaticResource Text.Caption}" Foreground="{Binding AttentionTextBrush}" />
         </Border>
     </StackPanel>
 </UserControl>

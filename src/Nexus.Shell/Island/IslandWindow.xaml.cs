@@ -23,8 +23,23 @@ public enum SurfaceShape
     Panel,
 }
 
+/// <summary>Which side of its window the island hugs: the screen edge it sits against, or neither.</summary>
+internal enum HAlign { Left, Center, Right }
+
+/// <summary>
+/// Where the island's window goes for a placement, in physical pixels, and how the island sits in it.
+/// <see cref="Spot"/> is the placement actually used: a spot that is not possible right now (no room in
+/// the taskbar, taskbar on another edge) falls back to one that is.
+/// </summary>
+internal readonly record struct Geometry(
+    Placement Spot, IntPtr Monitor, double Scale, int X, int Y, int Width, int Height,
+    bool AnchorBottom, bool FlushTop, HAlign Align, bool Docked,
+    Win32.RECT? Footprint, int RestX, int RestY);
+
 /// <summary>What the island should look like right now.</summary>
-public sealed record Scene(SurfaceShape Shape, FrameworkElement? Content = null, bool Attention = false, FrameworkElement? Bubble = null);
+/// <param name="AttentionBrush">Colour of the "needs you" edge and pulse; null for the standard attention orange.</param>
+public sealed record Scene(SurfaceShape Shape, FrameworkElement? Content = null, bool Attention = false, FrameworkElement? Bubble = null,
+    Brush? AttentionBrush = null);
 
 /// <summary>
 /// The island surface. It knows how to look and move (placement, rise and sink, the container
@@ -48,12 +63,24 @@ public partial class IslandWindow : Window
     private SurfaceShape _shape = SurfaceShape.Resting;
     private bool _attention;
     private bool _anchorBottom = true;
+    private bool _flushTop;
+    private bool _docked;
+    private HAlign _align = HAlign.Center;
+    private Geometry? _geometry;
+    private Placement? _moved;
+    private int _glideToken;
     private int _visibilityToken;
     private double _clipRadius = RestingRadius;
     private int _sizeToken;
 
     /// <summary>Gap between the island and the taskbar (or the top of the screen).</summary>
     private const double StageGap = 8;
+
+    /// <summary>Distance from the side of the screen in the bottom-left and bottom-right spots.</summary>
+    private const double EdgeInset = 12;
+
+    /// <summary>The area the compact island can take up at a spot: what must be clear of an app's controls.</summary>
+    private static readonly Size FootprintSize = new(400, 46);
 
     /// <summary>Room above the island for its shadow and the "needs you" pulse ring.</summary>
     private const double ExtentMargin = 44;
@@ -85,6 +112,11 @@ public partial class IslandWindow : Window
         HitArea.MouseLeave += (_, _) => PointerExited?.Invoke();
         Bubble.MouseLeftButtonUp += (_, e) => { BubbleClicked?.Invoke(); e.Handled = true; };
 
+        HitArea.PreviewMouseLeftButtonDown += OnDragArm;
+        HitArea.PreviewMouseMove += OnDragMove;
+        HitArea.PreviewMouseLeftButtonUp += OnDragRelease;
+        HitArea.LostMouseCapture += (_, _) => { if (_dragging) EndDrag(); };
+
         ContentClip.SizeChanged += (_, e) => UpdateClip(e.NewSize);
         Surface.SizeChanged += (_, _) =>
         {
@@ -106,6 +138,15 @@ public partial class IslandWindow : Window
     public event Action? BubbleClicked;
     public event Action? EscapePressed;
     public event Action? KeyboardDeactivated;
+
+    /// <summary>The user picked the island up.</summary>
+    public event Action? DragStarted;
+
+    /// <summary>
+    /// The user dropped the island: the placement it landed on (a named spot when dropped close to one,
+    /// otherwise Custom), with its centre as a fraction of the screen's work area and that screen's name.
+    /// </summary>
+    public event Action<Placement, double, double, string?>? DragEnded;
 
     public IntPtr Handle => _hwnd;
 
@@ -147,15 +188,20 @@ public partial class IslandWindow : Window
 
         // Keep it 1 px inside the island's border, so the antialiased edge never shows a blur halo.
         const double inset = 1;
-        var left = _dock is not null ? inset : (Surface.ActualWidth - w) / 2 + inset;
-        var top = _anchorBottom ? Surface.ActualHeight - h + inset : 0;
+        var left = _align switch
+        {
+            HAlign.Left => inset,
+            HAlign.Right => Surface.ActualWidth - w + inset,
+            _ => (Surface.ActualWidth - w) / 2 + inset,
+        };
+        var top = _anchorBottom ? Surface.ActualHeight - h + inset : _flushTop ? 0 : inset;
         var topLeft = Surface.PointToScreen(new Point(left, top));
-        var bottomRight = Surface.PointToScreen(new Point(left + w - inset * 2, top + h - inset * (_anchorBottom ? 2 : 1)));
+        var bottomRight = Surface.PointToScreen(new Point(left + w - inset * 2, top + h - inset * (_flushTop ? 1 : 2)));
         var radius = Math.Max(1, Math.Min(h / 2, PanelRadius) - inset);
         _backdrop.Place(
             (int)Math.Round(topLeft.X), (int)Math.Round(topLeft.Y),
             (int)Math.Round(bottomRight.X - topLeft.X), (int)Math.Round(bottomRight.Y - topLeft.Y),
-            _hwnd, radius: (int)Math.Round(radius * _scale), squareTop: !_anchorBottom);
+            _hwnd, radius: (int)Math.Round(radius * _scale), squareTop: _flushTop);
     }
 
     private void KeepBackdropSynced(TimeSpan duration)
@@ -189,10 +235,26 @@ public partial class IslandWindow : Window
         }
     }
 
+    /// <summary>Where the user wants the island. Change it with <see cref="MoveTo"/> once the window is up.</summary>
     public Placement Placement { get; set; } = Placement.AboveTaskbar;
 
-    /// <summary>True when the island sits above the taskbar; false when it falls back to top-center.</summary>
+    /// <summary>Custom placement: the island's centre as a fraction of the work area of <see cref="CustomMonitor"/>.</summary>
+    public double CustomX { get; set; } = 0.5;
+    public double CustomY { get; set; } = 0.9;
+    public string? CustomMonitor { get; set; }
+
+    /// <summary>The spot the island moved to because its own was taken, or null when it is where the user wants it.</summary>
+    public Placement? MovedTo => _moved;
+
+    private Placement Effective => _moved ?? Placement;
+
+    /// <summary>True when the island grows upward (it sits in the lower part of the screen).</summary>
     public bool AnchorBottom => _anchorBottom;
+
+    /// <summary>The user may pick the island up and drop it somewhere else. Only while it is compact.</summary>
+    public bool CanDrag { get; set; }
+
+    public bool IsDragging => _dragging;
 
     public bool IsPointerOver => HitArea.IsMouseOver || Bubble.IsMouseOver;
 
@@ -250,9 +312,17 @@ public partial class IslandWindow : Window
             FadeContent(previous, scene.Content, growing, reduced);
         }
 
+        if (scene.Attention)
+        {
+            // Whoever needs you colours the edge and the pulse: Claude's own colour for Claude Code.
+            var edge = scene.AttentionBrush ?? (Brush)FindResource("Brush.Attention");
+            AttentionEdge.BorderBrush = edge;
+            PulseRing.BorderBrush = edge;
+        }
+
         SetAttention(scene.Attention);
         _sceneBubble = scene.Bubble;
-        SetBubble(scene.Shape == SurfaceShape.Pill && _dock is null ? scene.Bubble : null, reduced); // no room for a bubble in the taskbar
+        SetBubble(scene.Shape == SurfaceShape.Pill && !_docked ? scene.Bubble : null, reduced); // no room for a bubble in the taskbar
         _shape = scene.Shape;
         KeepBackdropSynced(TimeSpan.FromMilliseconds(450));
     }
@@ -292,8 +362,9 @@ public partial class IslandWindow : Window
         if (!IsVisible)
         {
             Show();
-            Reposition();
         }
+
+        Reposition();
 
         var from = _anchorBottom ? 8 : -8;
         if (Motion.Reduced)
@@ -360,8 +431,8 @@ public partial class IslandWindow : Window
     // ------------------------------------------------------------------ Placement
 
     /// <summary>
-    /// Centered, floating just above the taskbar's top edge so taskbar icons stay uncovered.
-    /// Falls back to top-center when the taskbar is on another edge or auto-hidden, or when chosen in settings.
+    /// Puts the window where the island belongs right now: its preferred spot, or the one it moved to.
+    /// A running glide ends here.
     /// </summary>
     public void Reposition()
     {
@@ -371,44 +442,16 @@ public partial class IslandWindow : Window
         }
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var bar = new Win32.APPBARDATA { cbSize = (uint)Marshal.SizeOf<Win32.APPBARDATA>() };
-        var found = Win32.SHAppBarMessage(Win32.ABM_GETTASKBARPOS, ref bar) != UIntPtr.Zero;
-        var stateData = new Win32.APPBARDATA { cbSize = (uint)Marshal.SizeOf<Win32.APPBARDATA>() };
-        var autoHide = ((uint)Win32.SHAppBarMessage(Win32.ABM_GETSTATE, ref stateData) & Win32.ABS_AUTOHIDE) != 0;
+        _glideToken++;
 
-        var monitor = found
-            ? Win32.MonitorFromRect(ref bar.rc, Win32.MONITOR_DEFAULTTOPRIMARY)
-            : Win32.MonitorFromPoint(default, Win32.MONITOR_DEFAULTTOPRIMARY);
-        var info = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
-        Win32.GetMonitorInfo(monitor, ref info);
-
-        var bottom = Placement == Placement.AboveTaskbar && found && bar.uEdge == Win32.ABE_BOTTOM && !autoHide;
-        SetAnchor(bottom);
-
-        var scale = Win32.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 ? dpiX / 96.0 : 1.0;
-        _scale = scale;
-        var width = (int)Math.Round(Width * scale);
-        var height = (int)Math.Round(_extent * scale);
-        var x = info.rcMonitor.Left + (info.rcMonitor.Width - width) / 2;
-        var y = bottom ? bar.rc.Top - height : info.rcWork.Top;
-
-        // Where the floating island lives, so the watcher can tell when a window reaches it.
-        var centerX = info.rcMonitor.Left + info.rcMonitor.Width / 2;
-        var half = (int)(200 * scale);
-        _floatingZone = bottom
-            ? new Win32.RECT { Left = centerX - half, Right = centerX + half, Top = bar.rc.Top - (int)(46 * scale), Bottom = bar.rc.Top }
-            : null;
-
-        if (bottom && _dock is { } gap)
+        var g = Resolve(Effective, _dock);
+        if (ApplyLayout(g))
         {
-            // Docked: the island sits in the empty part of the taskbar, vertically centered on it,
-            // left-aligned in the gap; panels open upward and to the right from there.
-            var pillBottom = gap.CenterY + (int)Math.Round(16 * scale);
-            x = gap.Left + (int)Math.Round(4 * scale);
-            y = pillBottom + (int)Math.Round(StageGap * scale) - height;
+            g = Resolve(Effective, _dock); // the new layout may have resized the island
         }
 
-        Win32.SetWindowPos(_hwnd, Win32.HWND_TOPMOST, x, y, width, height, Win32.SWP_NOACTIVATE | Win32.SWP_NOOWNERZORDER);
+        _geometry = g;
+        Win32.SetWindowPos(_hwnd, Win32.HWND_TOPMOST, g.X, g.Y, g.Width, g.Height, Win32.SWP_NOACTIVATE | Win32.SWP_NOOWNERZORDER);
 
         // Keep WPF's own Height in step so a later layout pass never resizes the window back.
         if (Math.Abs(Height - _extent) > 0.5)
@@ -416,14 +459,199 @@ public partial class IslandWindow : Window
             Height = _extent;
         }
 
-        DebugLog.Write($"Reposition took {watch.Elapsed.TotalMilliseconds:N1} ms");
+        DebugLog.Write($"Reposition {g.Spot} took {watch.Elapsed.TotalMilliseconds:N1} ms");
         KeepBackdropSynced(TimeSpan.FromMilliseconds(100));
     }
 
-    // ------------------------------------------------------------------ Docking into the taskbar
+    /// <summary>
+    /// Works out where the window goes for a placement.
+    /// <list type="bullet">
+    /// <item>Bottom centre, left and right float just above the taskbar's top edge, so taskbar icons stay uncovered.</item>
+    /// <item>Top centre hangs flush from the top edge.</item>
+    /// <item>Taskbar tucks into the given free stretch of the taskbar.</item>
+    /// <item>Custom is wherever the user dropped it; it grows toward the roomier side of the screen.</item>
+    /// </list>
+    /// The bottom spots fall back to top centre when the taskbar is on another edge or auto-hidden.
+    /// </summary>
+    private Geometry Resolve(Placement spot, TaskbarGap? gap)
+    {
+        var bar = new Win32.APPBARDATA { cbSize = (uint)Marshal.SizeOf<Win32.APPBARDATA>() };
+        var found = Win32.SHAppBarMessage(Win32.ABM_GETTASKBARPOS, ref bar) != UIntPtr.Zero;
+        var stateData = new Win32.APPBARDATA { cbSize = (uint)Marshal.SizeOf<Win32.APPBARDATA>() };
+        var autoHide = ((uint)Win32.SHAppBarMessage(Win32.ABM_GETSTATE, ref stateData) & Win32.ABS_AUTOHIDE) != 0;
+        var bottomOk = found && bar.uEdge == Win32.ABE_BOTTOM && !autoHide;
+
+        if (spot == Placement.Taskbar && (gap is null || !bottomOk))
+        {
+            spot = Placement.AboveTaskbar;
+        }
+
+        if (spot is Placement.AboveTaskbar or Placement.BottomLeft or Placement.BottomRight && !bottomOk)
+        {
+            spot = Placement.TopCenter;
+        }
+
+        var monitor = found
+            ? Win32.MonitorFromRect(ref bar.rc, Win32.MONITOR_DEFAULTTOPRIMARY)
+            : Win32.MonitorFromPoint(default, Win32.MONITOR_DEFAULTTOPRIMARY);
+        if (spot == Placement.Custom && Win32.MonitorByName(CustomMonitor) is var named && named != IntPtr.Zero)
+        {
+            monitor = named;
+        }
+
+        var info = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
+        Win32.GetMonitorInfo(monitor, ref info);
+        var scale = Win32.GetDpiForMonitor(monitor, 0, out var dpiX, out _) == 0 ? dpiX / 96.0 : 1.0;
+        int Px(double dips) => (int)Math.Round(dips * scale);
+
+        var work = info.rcWork;
+        var screen = info.rcMonitor;
+        var width = Px(Width);
+        var height = Px(_extent);
+        var stageGap = Px(StageGap);
+        var edge = Px(EdgeInset);
+        var restW = Px(RestingSize.Width);
+        var restH = Px(RestingSize.Height);
+        var footW = Px(FootprintSize.Width);
+        var footH = Px(FootprintSize.Height);
+        var centerX = screen.Left + screen.Width / 2;
+
+        switch (spot)
+        {
+            case Placement.TopCenter:
+            {
+                var foot = new Win32.RECT { Left = centerX - footW / 2, Right = centerX + footW / 2, Top = work.Top, Bottom = work.Top + footH };
+                return new Geometry(spot, monitor, scale, screen.Left + (screen.Width - width) / 2, work.Top, width, height,
+                    AnchorBottom: false, FlushTop: true, HAlign.Center, Docked: false, foot, centerX, work.Top + restH / 2);
+            }
+
+            case Placement.Taskbar:
+            {
+                // The island sits in the empty part of the taskbar, vertically centered on it, at the
+                // start of the gap; panels open upward and to the right from there.
+                var dock = gap!.Value;
+                var x = dock.Left + Px(4);
+                var y = dock.CenterY + Px(16) + stageGap - height;
+                return new Geometry(spot, monitor, scale, x, y, width, height,
+                    AnchorBottom: true, FlushTop: false, HAlign.Left, Docked: true, null, x + restW / 2, dock.CenterY);
+            }
+
+            case Placement.Custom:
+            {
+                // The saved point is the centre of the resting line. Keep the line fully on screen.
+                var cx = work.Left + (int)Math.Round(CustomX * work.Width);
+                var cy = work.Top + (int)Math.Round(CustomY * work.Height);
+                cx = Math.Clamp(cx, work.Left + edge + restW / 2, Math.Max(work.Left + edge + restW / 2, work.Right - edge - restW / 2));
+                cy = Math.Clamp(cy, work.Top + restH / 2, Math.Max(work.Top + restH / 2, work.Bottom - stageGap - restH / 2));
+
+                // Panels grow upward when there is room above (or more room than below), else downward.
+                var above = cy - work.Top;
+                var bottom = above >= Px(500) || above >= work.Bottom - cy;
+
+                // Near a side of the screen the island hugs that side, so panels open inward.
+                var align = HAlign.Center;
+                var x = cx - width / 2;
+                if (x < work.Left + edge)
+                {
+                    align = HAlign.Left;
+                    x = cx - restW / 2;
+                }
+                else if (x + width > work.Right - edge)
+                {
+                    align = HAlign.Right;
+                    x = cx + restW / 2 - width;
+                }
+
+                var footLeft = align switch { HAlign.Left => x, HAlign.Right => x + width - footW, _ => cx - footW / 2 };
+                int y, footTop;
+                if (bottom)
+                {
+                    var surfaceBottom = cy + restH / 2;
+                    y = surfaceBottom + stageGap - height;
+                    footTop = surfaceBottom + stageGap - footH;
+                }
+                else
+                {
+                    var surfaceTop = cy - restH / 2;
+                    y = surfaceTop - stageGap;
+                    footTop = y;
+                }
+
+                var foot = new Win32.RECT { Left = footLeft, Right = footLeft + footW, Top = footTop, Bottom = footTop + footH };
+                return new Geometry(spot, monitor, scale, x, y, width, height,
+                    bottom, FlushTop: false, align, Docked: false, foot, cx, cy);
+            }
+
+            default:
+            {
+                var align = spot switch { Placement.BottomLeft => HAlign.Left, Placement.BottomRight => HAlign.Right, _ => HAlign.Center };
+                var x = align switch
+                {
+                    HAlign.Left => work.Left + edge,
+                    HAlign.Right => work.Right - edge - width,
+                    _ => screen.Left + (screen.Width - width) / 2,
+                };
+                var footLeft = align switch { HAlign.Left => x, HAlign.Right => x + width - footW, _ => centerX - footW / 2 };
+                var restX = align switch { HAlign.Left => x + restW / 2, HAlign.Right => x + width - restW / 2, _ => centerX };
+                var foot = new Win32.RECT { Left = footLeft, Right = footLeft + footW, Top = bar.rc.Top - footH, Bottom = bar.rc.Top };
+                return new Geometry(spot, monitor, scale, x, bar.rc.Top - height, width, height,
+                    AnchorBottom: true, FlushTop: false, align, Docked: false, foot, restX, bar.rc.Top - stageGap - restH / 2);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Lays the island out for a geometry: which way it grows, which side it hugs, whether it hangs
+    /// flush from the top edge or sits in the taskbar. Returns true when something changed.
+    /// </summary>
+    private bool ApplyLayout(Geometry g)
+    {
+        _scale = g.Scale;
+        if (_layoutApplied && g.AnchorBottom == _anchorBottom && g.FlushTop == _flushTop && g.Align == _align && g.Docked == _docked)
+        {
+            return false;
+        }
+
+        var dockChanged = g.Docked != _docked;
+        _layoutApplied = true;
+        _anchorBottom = g.AnchorBottom;
+        _flushTop = g.FlushTop;
+        _align = g.Align;
+        _docked = g.Docked;
+
+        // Above the taskbar the island floats 8 px clear of it. At the top it hangs flush from the
+        // screen edge, like a MacBook's notch, and grows downward from there.
+        var v = _anchorBottom ? VerticalAlignment.Bottom : VerticalAlignment.Top;
+        Stage.VerticalAlignment = v;
+        Stage.Margin = _anchorBottom ? new Thickness(0, 0, 0, StageGap) : _flushTop ? new Thickness(0) : new Thickness(0, StageGap, 0, 0);
+        HitArea.VerticalAlignment = v;
+        Surface.VerticalAlignment = v;
+        Bubble.VerticalAlignment = v;
+        CurrentHost.AnchorBottom = _anchorBottom;
+        OutgoingHost.AnchorBottom = _anchorBottom;
+
+        // Centered on the screen, or hugging the left or right side of its window.
+        Stage.ColumnDefinitions[0].Width = _align == HAlign.Left ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        Stage.ColumnDefinitions[2].Width = _align == HAlign.Right ? GridLength.Auto : new GridLength(1, GridUnitType.Star);
+        CurrentHost.AnchorLeft = _align == HAlign.Left;
+        OutgoingHost.AnchorLeft = _align == HAlign.Left;
+
+        ApplyShape(_shape, reduced: true);
+        SetBubble(_docked || _shape != SurfaceShape.Pill ? null : _sceneBubble, reduced: true);
+
+        // A taskbar gap can be narrower than the island: refit it.
+        if (dockChanged && (_current is not null || _shape == SurfaceShape.Resting))
+        {
+            AnimateSize(TargetSize(new Scene(_shape, _current)), growing: true, reduced: true);
+        }
+
+        return true;
+    }
+
+    // ------------------------------------------------------------------ Moving between spots
 
     private TaskbarGap? _dock;
-    private Win32.RECT? _floatingZone;
+    private bool _layoutApplied;
     private double _scale = 1;
     private FrameworkElement? _sceneBubble;
 
@@ -436,76 +664,259 @@ public partial class IslandWindow : Window
         },
         new Point(0, 0), new Point(1, 0)));
 
-    /// <summary>The floating island's spot on screen (physical pixels), or null when it isn't above the taskbar.</summary>
-    internal Win32.RECT? FloatingZone => _floatingZone;
-
     /// <summary>True while the island is tucked into the taskbar.</summary>
-    public bool IsDocked => _dock is not null;
+    public bool IsDocked => _docked;
 
     /// <summary>Display scale of the island's monitor (1.25 at 125%).</summary>
     public double ScaleFactor => _scale;
 
     /// <summary>
-    /// Tucks the island into a free stretch of the taskbar, or brings it back above the taskbar (null).
-    /// Switching between the two sinks the island into the taskbar and rises it in its new place.
+    /// The screen area (physical pixels) the compact island takes up at a spot, or null when that spot
+    /// is not available right now. The taskbar spot has none: nothing of an app is ever under it.
     /// </summary>
-    internal void Dock(TaskbarGap? gap)
+    internal Win32.RECT? Footprint(Placement spot)
     {
-        if (gap is null && _dock is null)
+        if (_hwnd == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        var g = Resolve(spot, null);
+        return g.Spot == spot ? g.Footprint : null;
+    }
+
+    /// <summary>
+    /// Sets where the island lives: the user's preferred spot, plus the spot it has moved to because
+    /// its own is taken (null: it is where the user wants it) and the taskbar gap to use for the
+    /// taskbar spot. The island glides to the new place; going into or out of the taskbar or the top
+    /// edge, where it changes shape, it sinks away and rises in its new place instead.
+    /// </summary>
+    internal void MoveTo(Placement preferred, Placement? moved, TaskbarGap? gap)
+    {
+        if (moved == preferred)
+        {
+            moved = null;
+        }
+
+        var target = Resolve(moved ?? preferred, gap);
+        var current = _geometry;
+
+        Placement = preferred;
+        _moved = moved;
+        _dock = gap;
+
+        if (current is { } c && c.Spot == target.Spot && c.X == target.X && c.Y == target.Y && c.Align == target.Align && !_dragDropped)
+        {
+            return; // already there
+        }
+
+        _dragDropped = false;
+        DebugLog.Write($"Move to {target.Spot} ({target.X},{target.Y})");
+
+        if (current is not { } from || !IsVisible || Stage.Opacity < 0.5 || Motion.Reduced)
+        {
+            Reposition();
+            return;
+        }
+
+        // Different shape or a different screen: no straight path between the two, so sink and rise.
+        if (from.FlushTop || target.FlushTop || from.Docked || target.Docked ||
+            from.Monitor != target.Monitor || from.AnchorBottom != target.AnchorBottom)
+        {
+            Sink(() =>
+            {
+                Reposition();
+                Rise();
+            });
+            return;
+        }
+
+        // Same shape: glide. Lay out for the new spot first, then start the window where the island
+        // appears to be now (the layout change may have shifted it inside the window).
+        var before = SurfaceOffset();
+        _glideToken++;
+        if (ApplyLayout(target))
+        {
+            target = Resolve(Effective, _dock);
+        }
+
+        _geometry = target;
+        UpdateLayout();
+        var after = SurfaceOffset();
+        Win32.GetWindowRect(_hwnd, out var now);
+        Glide(now.Left + before.X - after.X, now.Top + before.Y - after.Y, target);
+    }
+
+    /// <summary>The island's top-left corner inside the window, in physical pixels.</summary>
+    private (int X, int Y) SurfaceOffset()
+    {
+        var p = Surface.TranslatePoint(new Point(0, 0), this);
+        return ((int)Math.Round(p.X * _scale), (int)Math.Round(p.Y * _scale));
+    }
+
+    /// <summary>State 4, repositioning: the window slides to its new spot on a spring, the blur following.</summary>
+    private void Glide(int fromX, int fromY, Geometry to)
+    {
+        var token = ++_glideToken;
+        Win32.SetWindowPos(_hwnd, Win32.HWND_TOPMOST, fromX, fromY, to.Width, to.Height, Win32.SWP_NOACTIVATE | Win32.SWP_NOOWNERZORDER);
+        SyncBackdrop();
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        EventHandler? tick = null;
+        tick = (_, _) =>
+        {
+            if (token != _glideToken)
+            {
+                CompositionTarget.Rendering -= tick;
+                return;
+            }
+
+            var t = Math.Min(1, watch.Elapsed.TotalMilliseconds / Motion.Glide.TotalMilliseconds);
+            var eased = Motion.Spring.Ease(t);
+            var x = (int)Math.Round(fromX + (to.X - fromX) * eased);
+            var y = (int)Math.Round(fromY + (to.Y - fromY) * eased);
+            Win32.SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+            SyncBackdrop();
+
+            if (t >= 1)
+            {
+                CompositionTarget.Rendering -= tick;
+            }
+        };
+        CompositionTarget.Rendering += tick;
+    }
+
+    // ------------------------------------------------------------------ Dragging
+
+    private bool _dragArmed;
+    private bool _dragging;
+    private bool _dragDropped;
+    private Win32.POINT _dragFrom;
+    private Win32.RECT _dragWindow;
+
+    private void OnDragArm(object sender, MouseButtonEventArgs e)
+    {
+        // Buttons on the island (play, next) keep their clicks.
+        if (!CanDrag || IsInsideButton(e.OriginalSource as DependencyObject))
         {
             return;
         }
 
-        if (gap is { } g && _dock is { } d && Math.Abs(g.Left - d.Left) <= 4 && Math.Abs(g.Width - d.Width) <= 8)
+        Win32.GetCursorPos(out _dragFrom);
+        Win32.GetWindowRect(_hwnd, out _dragWindow);
+        _dragArmed = true;
+    }
+
+    private void OnDragMove(object sender, MouseEventArgs e)
+    {
+        if (!_dragArmed)
         {
-            return; // same place
+            return;
         }
 
-        DebugLog.Write(gap is { } dock ? $"Dock into {dock.Left}-{dock.Right}" : "Undock");
-        var switching = (gap is null) != (_dock is null);
-
-        void Apply()
+        if (e.LeftButton != MouseButtonState.Pressed)
         {
-            _dock = gap;
-            ApplyDockLayout();
-            Reposition();
-        }
-
-        if (switching && IsVisible && Stage.Opacity > 0.5 && !Motion.Reduced)
-        {
-            Sink(() =>
+            _dragArmed = false;
+            if (_dragging)
             {
-                Apply();
-                Rise();
-            });
+                EndDrag();
+            }
+
+            return;
         }
-        else
+
+        Win32.GetCursorPos(out var now);
+        var dx = now.X - _dragFrom.X;
+        var dy = now.Y - _dragFrom.Y;
+        if (!_dragging)
         {
-            Apply();
+            // A few pixels of slack, so a slightly shaky click still opens the island.
+            var slack = 6 * _scale;
+            if (Math.Abs(dx) < slack && Math.Abs(dy) < slack)
+            {
+                return;
+            }
+
+            _dragging = true;
+            _glideToken++;
+            HitArea.CaptureMouse();
+            DebugLog.Write("Drag started");
+            DragStarted?.Invoke();
+        }
+
+        Win32.SetWindowPos(_hwnd, IntPtr.Zero, _dragWindow.Left + dx, _dragWindow.Top + dy, 0, 0,
+            Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
+        SyncBackdrop();
+    }
+
+    private void OnDragRelease(object sender, MouseButtonEventArgs e)
+    {
+        _dragArmed = false;
+        if (_dragging)
+        {
+            e.Handled = true; // a drop is not a click
+            EndDrag();
         }
     }
 
-    private void ApplyDockLayout()
+    private void EndDrag()
     {
-        var docked = _dock is not null;
+        _dragging = false;
+        _dragArmed = false;
+        HitArea.ReleaseMouseCapture();
 
-        // Docked: left-aligned in the gap. Floating: centered on the screen.
-        Stage.ColumnDefinitions[0].Width = docked ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
-        CurrentHost.AnchorLeft = docked;
-        OutgoingHost.AnchorLeft = docked;
-
-        ApplyShape(_shape, reduced: true);
-        SetBubble(docked || _shape != SurfaceShape.Pill ? null : _sceneBubble, reduced: true);
-
-        if (_current is not null || _shape == SurfaceShape.Resting)
+        // Where the resting line would be now: that point is what gets remembered.
+        var topLeft = Surface.PointToScreen(new Point(0, 0));
+        var bottomRight = Surface.PointToScreen(new Point(Surface.ActualWidth, Surface.ActualHeight));
+        var restW = RestingSize.Width * _scale;
+        var restH = RestingSize.Height * _scale;
+        var cx = _align switch
         {
-            var target = TargetSize(new Scene(_shape, _current));
-            AnimateSize(target, growing: true, reduced: true);
+            HAlign.Left => topLeft.X + restW / 2,
+            HAlign.Right => bottomRight.X - restW / 2,
+            _ => (topLeft.X + bottomRight.X) / 2,
+        };
+        var cy = _anchorBottom ? bottomRight.Y - restH / 2 : topLeft.Y + restH / 2;
+
+        // Dropped close to a named spot: snap to it, so "back to the middle" is easy to hit.
+        var placement = Placement.Custom;
+        foreach (var spot in new[] { Placement.AboveTaskbar, Placement.BottomLeft, Placement.BottomRight, Placement.TopCenter })
+        {
+            var g = Resolve(spot, null);
+            if (g.Spot == spot && Math.Abs(g.RestX - cx) < 48 * _scale && Math.Abs(g.RestY - cy) < 28 * _scale)
+            {
+                placement = spot;
+                break;
+            }
         }
+
+        var monitor = Win32.MonitorFromPoint(new Win32.POINT { X = (int)cx, Y = (int)cy }, Win32.MONITOR_DEFAULTTONEAREST);
+        var info = new Win32.MONITORINFO { cbSize = (uint)Marshal.SizeOf<Win32.MONITORINFO>() };
+        Win32.GetMonitorInfo(monitor, ref info);
+        var work = info.rcWork;
+        var fx = work.Width > 0 ? Math.Clamp((cx - work.Left) / work.Width, 0, 1) : 0.5;
+        var fy = work.Height > 0 ? Math.Clamp((cy - work.Top) / work.Height, 0, 1) : 0.9;
+
+        _dragDropped = true; // the window is no longer where the last geometry put it
+        DebugLog.Write($"Dropped at {cx:N0},{cy:N0} -> {placement} {fx:N3},{fy:N3}");
+        DragEnded?.Invoke(placement, fx, fy, Win32.MonitorName(monitor));
+    }
+
+    private static bool IsInsideButton(DependencyObject? source)
+    {
+        for (var node = source; node is not null; node = node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
+        {
+            if (node is System.Windows.Controls.Primitives.ButtonBase)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Width available to the compact island inside the taskbar gap, in DIPs.</summary>
-    private double DockedMaxWidth => _dock is { } gap ? Math.Max(60, (gap.Width - 8 * _scale) / _scale) : double.PositiveInfinity;
+    private double DockedMaxWidth => _docked && _dock is { } gap ? Math.Max(60, (gap.Width - 8 * _scale) / _scale) : double.PositiveInfinity;
 
     public void EnsureTopmost()
     {
@@ -549,22 +960,6 @@ public partial class IslandWindow : Window
         var style = Win32.GetWindowLongPtr(_hwnd, Win32.GWL_EXSTYLE).ToInt64();
         style = on ? style | flag : style & ~flag;
         Win32.SetWindowLongPtr(_hwnd, Win32.GWL_EXSTYLE, new IntPtr(style));
-    }
-
-    private void SetAnchor(bool bottom)
-    {
-        _anchorBottom = bottom;
-        var v = bottom ? VerticalAlignment.Bottom : VerticalAlignment.Top;
-        Stage.VerticalAlignment = v;
-        // Above the taskbar the island floats 8 px clear of it. At the top it hangs flush from the
-        // screen edge, like a MacBook's notch, and grows downward from there.
-        Stage.Margin = bottom ? new Thickness(0, 0, 0, StageGap) : new Thickness(0);
-        HitArea.VerticalAlignment = v;
-        Surface.VerticalAlignment = v;
-        Bubble.VerticalAlignment = v;
-        CurrentHost.AnchorBottom = bottom;
-        OutgoingHost.AnchorBottom = bottom;
-        ApplyShape(_shape, reduced: true);
     }
 
     private Size TargetSize(Scene scene)
@@ -622,7 +1017,7 @@ public partial class IslandWindow : Window
         var resting = shape == SurfaceShape.Resting;
 
         // Hanging from the top edge: no top border (it meets the screen edge).
-        var flushTop = !_anchorBottom;
+        var flushTop = _flushTop;
         SurfaceFill.BorderThickness = flushTop ? new Thickness(1, 0, 1, 1) : new Thickness(1);
         AttentionEdge.BorderThickness = flushTop ? new Thickness(1.5, 0, 1.5, 1.5) : new Thickness(1.5);
         PulseRing.BorderThickness = flushTop ? new Thickness(2, 0, 2, 2) : new Thickness(2);
@@ -633,13 +1028,19 @@ public partial class IslandWindow : Window
 
         // The resting line is small, so its hit area is much larger than what is drawn: wide, tall,
         // and reaching all the way down to the taskbar edge so there is no dead gap below it.
-        var docked = _dock is not null;
+        // Against a side of the screen (or the start of a taskbar gap) the line sits right at that edge.
+        var docked = _docked;
+        var padLeft = _align == HAlign.Left ? 0 : 32;
+        var padRight = _align == HAlign.Right ? 0 : 32;
+        var padTop = _flushTop ? 0 : StageGap;
         HitArea.Background = resting ? HitBrush : Brushes.Transparent;
         HitArea.Padding = resting
-            ? (_anchorBottom ? new Thickness(docked ? 0 : 32, 18, 32, StageGap) : new Thickness(32, 0, 32, 18))
+            ? (_anchorBottom ? new Thickness(padLeft, 18, padRight, StageGap) : new Thickness(padLeft, padTop, padRight, 18))
             : new Thickness(0);
         // At the top the hit area already starts at the screen edge, so flicking the pointer up works.
-        HitArea.Margin = resting && _anchorBottom ? new Thickness(0, 0, 0, -StageGap) : new Thickness(0);
+        HitArea.Margin = !resting ? new Thickness(0)
+            : _anchorBottom ? new Thickness(0, 0, 0, -StageGap)
+            : new Thickness(0, -padTop, 0, 0);
         HitArea.Cursor = resting ? Cursors.Hand : null;
 
         // Docked, the island is laid out for the 32 px pill centered on the taskbar; lift the thinner
@@ -677,7 +1078,7 @@ public partial class IslandWindow : Window
         var radius = Math.Max(2, Math.Min(h / 2, PanelRadius));
         _clipRadius = radius;
 
-        var flushTop = !_anchorBottom;
+        var flushTop = _flushTop;
         var corners = flushTop ? new CornerRadius(0, 0, radius, radius) : new CornerRadius(radius);
         SurfaceFill.CornerRadius = corners;
         AttentionEdge.CornerRadius = corners;
@@ -832,7 +1233,7 @@ public partial class IslandWindow : Window
 
     private void UpdateClip(Size size)
     {
-        if (_anchorBottom || size.Width <= 0 || size.Height <= 0)
+        if (!_flushTop || size.Width <= 0 || size.Height <= 0)
         {
             ContentClip.Clip = new RectangleGeometry(new Rect(size), _clipRadius, _clipRadius);
             return;

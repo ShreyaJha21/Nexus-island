@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using Nexus.Core;
 
 namespace Nexus.Modes;
@@ -77,6 +78,9 @@ public abstract class IslandMode : ObservableObject
 
     /// <summary>When true the compact pill and panel get the 1.5 px orange "needs you" edge.</summary>
     public virtual bool HasAttentionEdge => false;
+
+    /// <summary>Colour of the "needs you" edge and pulse, or null for the standard attention orange.</summary>
+    public virtual Brush? AttentionBrush => null;
 
     /// <summary>Called by the shell when this mode's panel opens or closes, so modes can tick only while visible.</summary>
     public virtual void OnPanelOpened() { }

@@ -4,12 +4,15 @@ using System.Windows.Threading;
 
 namespace Nexus.Shell.Native;
 
+/// <summary>The app window the user is working in: where it is and whose it is.</summary>
+internal sealed record ForegroundInfo(IntPtr Hwnd, Win32.RECT Bounds, string Process, string Title);
+
 /// <summary>
 /// Watches the window in front, for two things:
 /// <list type="bullet">
 /// <item>Fullscreen apps, games and presentations, so Nexus hides.</item>
-/// <item>Windows that reach the island's spot above the taskbar (maximized apps, tall windows),
-/// so the island can tuck into the taskbar instead of covering their toolbars or status bars.</item>
+/// <item>Which app is in front and where its window is, so the island can keep clear of its
+/// toolbars and status bars (smart positioning).</item>
 /// </list>
 /// Checks when the foreground window changes, when a window finishes moving, resizing, minimizing or
 /// restoring, plus a light 1 s check for changes that raise no event (the maximize button).
@@ -30,7 +33,6 @@ internal sealed class FullscreenWatcher : IDisposable
     private const int DWMWA_CLOAKED = 14;
 
     private readonly Func<IntPtr> _ownWindow;
-    private readonly Func<Win32.RECT?> _islandZone;
     private readonly int _ownProcessId = Environment.ProcessId;
     private readonly Win32.WinEventProc _foregroundCallback; // kept alive for the native hooks
     private readonly Win32.WinEventProc _layoutCallback;
@@ -40,11 +42,9 @@ internal sealed class FullscreenWatcher : IDisposable
     private readonly DispatcherTimer _timer;
 
     /// <param name="ownWindow">The island window, which never counts as "in front".</param>
-    /// <param name="islandZone">Where the floating island lives on screen (physical pixels), or null when it isn't above the taskbar.</param>
-    public FullscreenWatcher(Func<IntPtr> ownWindow, Func<Win32.RECT?> islandZone)
+    public FullscreenWatcher(Func<IntPtr> ownWindow)
     {
         _ownWindow = ownWindow;
-        _islandZone = islandZone;
 
         _foregroundCallback = (_, _, _, _, _, _, _) =>
         {
@@ -67,12 +67,13 @@ internal sealed class FullscreenWatcher : IDisposable
 
     public bool IsFullscreen { get; private set; }
 
-    /// <summary>True when the window in front reaches the island's spot above the taskbar.</summary>
-    public bool IsIslandCovered { get; private set; }
+    /// <summary>The app window in front, or null on the desktop (or behind a fullscreen app).</summary>
+    public ForegroundInfo? Foreground { get; private set; }
 
     public event Action<bool>? Changed;
 
-    public event Action<bool>? CoverageChanged;
+    /// <summary>Another app came to the front, or its window moved, resized or changed title.</summary>
+    public event Action<ForegroundInfo?>? WorkspaceChanged;
 
     /// <summary>Raised whenever another window comes to the front, so the island can re-assert topmost.</summary>
     public event Action? ForegroundChanged;
@@ -88,15 +89,14 @@ internal sealed class FullscreenWatcher : IDisposable
             if (fg != IntPtr.Zero && Win32.ClassName(fg) is "Progman" or "WorkerW")
             {
                 // Desktop in front: nothing covers the island.
-                Update(fullscreen: false, covered: false);
+                Update(fullscreen: false, foreground: null);
             }
 
             return;
         }
 
         var fullscreen = DetectFullscreen(fg);
-        var covered = !fullscreen && CoversIsland(fg);
-        Update(fullscreen, covered);
+        Update(fullscreen, fullscreen ? null : Describe(fg));
     }
 
     public void Dispose()
@@ -111,7 +111,7 @@ internal sealed class FullscreenWatcher : IDisposable
         }
     }
 
-    private void Update(bool fullscreen, bool covered)
+    private void Update(bool fullscreen, ForegroundInfo? foreground)
     {
         if (fullscreen != IsFullscreen)
         {
@@ -120,12 +120,40 @@ internal sealed class FullscreenWatcher : IDisposable
             Changed?.Invoke(fullscreen);
         }
 
-        if (covered != IsIslandCovered)
+        if (foreground != Foreground)
         {
-            DebugLog.Write($"Island covered {covered}");
-            IsIslandCovered = covered;
-            CoverageChanged?.Invoke(covered);
+            Foreground = foreground;
+            WorkspaceChanged?.Invoke(foreground);
         }
+    }
+
+    private IntPtr _describedWindow;
+    private string _describedProcess = "";
+
+    private ForegroundInfo? Describe(IntPtr fg)
+    {
+        if (Win32.IsIconic(fg) || !Win32.IsWindowVisible(fg) || IsCloaked(fg) || !VisibleBounds(fg, out var bounds))
+        {
+            return null;
+        }
+
+        // The process name only changes with the window, so look it up once per window.
+        if (fg != _describedWindow)
+        {
+            _describedWindow = fg;
+            Win32.GetWindowThreadProcessId(fg, out var pid);
+            try
+            {
+                using var process = Process.GetProcessById((int)pid);
+                _describedProcess = process.ProcessName;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                _describedProcess = "";
+            }
+        }
+
+        return new ForegroundInfo(fg, bounds, _describedProcess, Win32.WindowText(fg));
     }
 
     private bool DetectFullscreen(IntPtr fg)
@@ -151,17 +179,6 @@ internal sealed class FullscreenWatcher : IDisposable
 
         var m = info.rcMonitor;
         return rect.Left <= m.Left && rect.Top <= m.Top && rect.Right >= m.Right && rect.Bottom >= m.Bottom;
-    }
-
-    private bool CoversIsland(IntPtr fg)
-    {
-        if (_islandZone() is not { } zone || Win32.IsIconic(fg) || !Win32.IsWindowVisible(fg) || IsCloaked(fg))
-        {
-            return false;
-        }
-
-        return VisibleBounds(fg, out var r) &&
-               r.Left < zone.Right && r.Right > zone.Left && r.Top < zone.Bottom && r.Bottom > zone.Top;
     }
 
     /// <summary>The window's visible frame, without the invisible resize borders Windows adds around it.</summary>

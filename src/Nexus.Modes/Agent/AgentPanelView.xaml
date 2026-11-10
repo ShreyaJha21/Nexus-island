@@ -7,7 +7,7 @@
         <!-- Figma: Island / Panel, Mode=Agent needs you (7:79) -->
         <StackPanel Visibility="{Binding ShowNeedsYouPanel, Converter={StaticResource BoolToVisibility}}">
             <DockPanel>
-                <c:NexusIcon Kind="attention" Width="20" Height="20" Foreground="{StaticResource Brush.Attention}" DockPanel.Dock="Left" />
+                <c:NexusIcon Kind="attention" Width="20" Height="20" Foreground="{Binding AttentionTextBrush}" DockPanel.Dock="Left" />
                 <TextBlock Text="{Binding NeedsYouAge}" Style="{StaticResource Text.Caption}" DockPanel.Dock="Right" />
                 <TextBlock Text="{Binding NeedsYouTitle}" Style="{StaticResource Text.BodyStrong}" Margin="8,0,8,0" />
             </DockPanel>
@@ -24,7 +24,11 @@
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                <Button Content="Open terminal" Command="{Binding OpenTerminalCommand}" Style="{StaticResource Button.Primary}" />
+                <!-- Claude Code gets its button in Claude's colour; other agents keep the accent colour. -->
+                <Button Content="Open terminal" Command="{Binding OpenTerminalCommand}" Style="{StaticResource Button.Claude}"
+                        Visibility="{Binding IsClaude, Converter={StaticResource BoolToVisibility}}" />
+                <Button Content="Open terminal" Command="{Binding OpenTerminalCommand}" Style="{StaticResource Button.Primary}"
+                        Visibility="{Binding IsClaude, Converter={StaticResource InverseBoolToVisibility}}" />
                 <Button Content="Remind me later" Command="{Binding RemindLaterCommand}" Style="{StaticResource Button.Secondary}" Margin="8,0,0,0" />
             </StackPanel>
 
@@ -37,7 +41,7 @@
         <!-- Figma: Panel · Agent sessions (18:254) -->
         <StackPanel Visibility="{Binding ShowSessionsPanel, Converter={StaticResource BoolToVisibility}}">
             <StackPanel Orientation="Horizontal">
-                <c:NexusIcon Kind="bot" Width="20" Height="20" Foreground="{DynamicResource Brush.Accent}" />
+                <c:NexusIcon Kind="bot" Width="20" Height="20" Foreground="{Binding AccentBrush}" />
                 <TextBlock Text="{Binding PanelHeader}" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" />
                 <TextBlock Text="{Binding PanelCount}" Style="{StaticResource Text.Caption}" Margin="8,0,0,0" />
             </StackPanel>

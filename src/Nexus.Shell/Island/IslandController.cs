@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using Nexus.Core;
+using Nexus.Core.Positioning;
 using Nexus.Core.Settings;
 using Nexus.Modes;
 using Nexus.Modes.Agent;
@@ -107,7 +108,7 @@ public sealed class IslandController
         _holdTimer = Timer(MomentHold, OnHoldEnded);
         _toastTimer = Timer(ToastHold, OnToastEnded);
         _pauseTimer = Timer(TimeSpan.FromSeconds(30), () => { if (ExpirePauses()) Rearrange(); });
-        _hiddenUntilTimer = Timer(TimeSpan.FromMinutes(1), CheckHiddenUntil);
+        _hiddenUntilTimer = Timer(TimeSpan.FromMinutes(1), () => { CheckHiddenUntil(); RefreshQuiet(); });
 
         foreach (var mode in modes)
         {
@@ -130,6 +131,8 @@ public sealed class IslandController
         _window.PointerExited += OnPointerExited;
         _window.PointerMoved += () => { if (_state == State.Expanded) _idleTimer.Restart(); };
         _window.EscapePressed += Collapse;
+        _window.DragStarted += OnDragStarted;
+        _window.DragEnded += OnDragEnded;
         _window.KeyboardDeactivated += () =>
         {
             // Click outside closes a panel the user opened (but not when focus moved to our own menu).
@@ -229,6 +232,13 @@ public sealed class IslandController
             ShowIsland();
         }
 
+        if (!_visible && _hiddenByApp && !_hiddenByFullscreen)
+        {
+            // Hidden to keep out of an app's way: the user asked for it, so it comes out until it closes again.
+            _showForAttention = true;
+            UpdateVisibility();
+        }
+
         if (_visible)
         {
             OnClick();
@@ -237,17 +247,51 @@ public sealed class IslandController
 
     public void Reposition() => _window.Reposition();
 
-    // ================================================================== Docking into the taskbar
+    // ================================================================== Smart positioning
+    //
+    // The island has a preferred spot (bottom centre unless the user chose or dragged otherwise).
+    // What happens when the app in front has controls there depends on the mode:
+    //   Fixed     it stays put.
+    //   Smart     it glides to the first clear spot (app rule, then SafeSpots) and comes back when
+    //             the conflict is gone. Nowhere clear: it stays, but small.
+    //   AutoHide  it hides while a window covers its spot.
+    // "Clear" comes from three sources, in this order: the window's bounds (not under the island at
+    // all), per-app rules (Figma keeps its toolbar at the bottom centre), and UI Automation.
 
-    private DispatcherTimer? _dockTimer;
-    private bool _covered;
-    private int _dockRequest;
+    private DispatcherTimer? _placeTimer;
+    private DispatcherTimer? _recheckTimer;
+    private ForegroundInfo? _foreground;
+    private string? _foregroundRule;
+    private int _placeRequest;
+    private bool _hiddenByApp;
+    private bool _showForAttention;
+    private bool _appCompact;
+    private bool _squeezed;
+    private bool _revealed;
+    private bool _lastQuiet;
+    private IntPtr _placedByUserFor;
+    private IntPtr _warmedUp;
 
-    /// <summary>The watcher reports whether the window in front reaches the island's spot.</summary>
-    public void SetCovered(bool covered)
+    /// <summary>The watcher reports which app is in front and where its window is (null: the desktop).</summary>
+    internal void SetForeground(ForegroundInfo? info)
     {
-        _covered = covered;
-        ScheduleDock();
+        var rule = info is null ? null : SmartPlacement.FindRuleKey(_settings.Positioning.Apps, info.Process, info.Title);
+        var changed = info?.Hwnd != _foreground?.Hwnd || !Equals(info?.Bounds, _foreground?.Bounds) || rule != _foregroundRule;
+        _foreground = info;
+        _foregroundRule = rule;
+
+        if (!changed)
+        {
+            return; // only the title changed (a new tab, a spinner): nothing to decide again
+        }
+
+        if (info?.Hwnd != _placedByUserFor)
+        {
+            _placedByUserFor = IntPtr.Zero;
+        }
+
+        DebugLog.Write(info is null ? "In front: desktop" : $"In front: {info.Process} {info.Bounds.Left},{info.Bounds.Top} {info.Bounds.Width}x{info.Bounds.Height} rule={rule ?? "none"}");
+        SchedulePlacement();
     }
 
     /// <summary>Another window came to the front; the taskbar's buttons may have moved.</summary>
@@ -255,56 +299,320 @@ public sealed class IslandController
     {
         if (_window.IsDocked)
         {
-            ScheduleDock();
+            SchedulePlacement();
         }
     }
-
-    public void RefreshDock() => ScheduleDock();
 
     /// <summary>Debounced, so flicking through windows with Alt+Tab doesn't bounce the island.</summary>
-    private void ScheduleDock()
+    private void SchedulePlacement()
     {
-        _dockTimer ??= Timer(TimeSpan.FromMilliseconds(350), ApplyDock);
-        _dockTimer.Restart();
+        _placeTimer ??= Timer(TimeSpan.FromMilliseconds(350), ApplyPlacement);
+        _placeTimer.Restart();
     }
 
-    private void ApplyDock()
+    private void ApplyPlacement()
     {
-        _dockTimer?.Stop();
+        _placeTimer?.Stop();
 
-        // Never move the island while the user is looking at a panel, a banner or the hide toast;
-        // Collapse and the end of a banner call this again.
-        if (_state is State.Expanded or State.Banner or State.Toast)
+        // Never move the island while the user is looking at a panel, a banner or the hide toast, or
+        // holding it; Collapse, the end of a banner and the drop call this again.
+        if (_state is State.Expanded or State.Banner or State.Toast || _window.IsDragging)
         {
             return;
         }
 
-        var want = _covered && _settings.DockOverApps && _window.FloatingZone is not null;
-        if (!want)
+        var pos = _settings.Positioning;
+        var preferred = _settings.Placement;
+        var fg = _foreground;
+        var request = ++_placeRequest;
+        var rule = fg is not null && pos.Mode == PositionMode.Smart ? SmartPlacement.FindRule(pos.Apps, fg.Process, fg.Title) : null;
+        _appCompact = rule?.Compact == true;
+
+        if (pos.Mode == PositionMode.AutoHide)
         {
-            _window.Dock(null);
+            var covered = fg is not null && _window.Footprint(preferred) is { } spot && fg.Bounds.Intersects(spot);
+            Settle(request, preferred, moved: null, hide: covered, squeezed: false);
             return;
         }
 
-        // Reading the taskbar takes a couple of hundred milliseconds: do it off the UI thread.
-        var request = ++_dockRequest;
-        var minWidth = (int)Math.Round(100 * _window.ScaleFactor);
-        Task.Run(() => TaskbarLayout.FindGaps(minWidth)).ContinueWith(t =>
+        if (pos.Mode == PositionMode.Fixed || fg is null || fg.Hwnd == _placedByUserFor)
         {
-            if (request != _dockRequest || !_covered || _state is State.Expanded or State.Banner or State.Toast)
+            Settle(request, preferred, moved: null, hide: false, squeezed: false);
+            return;
+        }
+
+        if (rule is null && pos.StayInBrowsers && SmartPlacement.IsBrowser(fg.Process))
+        {
+            DebugLog.Write($"Smart position for {fg.Process}: a browser, staying put");
+            Settle(request, preferred, moved: null, hide: false, squeezed: false);
+            return;
+        }
+
+        if (rule?.Hide == true)
+        {
+            Settle(request, preferred, moved: null, hide: true, squeezed: false);
+            return;
+        }
+
+        var candidates = new List<Placement>();
+        if (rule?.MoveTo is { } first)
+        {
+            candidates.Add(first);
+        }
+
+        candidates.AddRange(pos.SafeSpots);
+
+        var footprints = new Dictionary<Placement, Win32.RECT>();
+        foreach (var spot in candidates.Prepend(preferred).Distinct())
+        {
+            if (_window.Footprint(spot) is { } area)
+            {
+                footprints[spot] = area;
+            }
+        }
+
+        var detect = pos.DetectControls;
+        var scale = _window.ScaleFactor;
+        var minGap = MinGapWidth;
+
+        // Reading another app's controls and the taskbar takes a few hundred milliseconds: off the UI thread.
+        Task.Run(() =>
+        {
+            TaskbarGap? gap = null;
+            var gapKnown = false;
+            var probed = false;
+
+            bool Blocked(Placement spot)
+            {
+                if (spot == Placement.Taskbar)
+                {
+                    if (!gapKnown)
+                    {
+                        gapKnown = true;
+                        gap = BestGap(minGap);
+                    }
+
+                    return gap is null; // no room in the taskbar
+                }
+
+                if (!footprints.TryGetValue(spot, out var area))
+                {
+                    return true; // not possible on this setup
+                }
+
+                if (!fg.Bounds.Intersects(area))
+                {
+                    return false; // the window doesn't reach this spot
+                }
+
+                if (rule is { Avoid.Count: > 0 })
+                {
+                    return rule.Avoid.Contains(spot); // a known app: its rule is the whole truth
+                }
+
+                if (!detect)
+                {
+                    return false;
+                }
+
+                probed = true;
+                var blocked = ControlProbe.HasControls(fg.Hwnd, area, scale, out var found);
+                DebugLog.Write($"{spot}: {(blocked ? $"taken by {found}" : "clear")}");
+                return blocked;
+            }
+
+            var chosen = SmartPlacement.Choose(preferred, candidates, Blocked);
+            return (Chosen: chosen, Gap: gap, GapKnown: gapKnown, Probed: probed);
+        }).ContinueWith(t =>
+        {
+            if (request != _placeRequest || t.IsFaulted)
             {
                 return;
             }
 
-            // The widest free stretch; on a tie, the leftmost (where Windows puts the weather widget).
-            var gap = t.Result?.OrderByDescending(g => g.Width).ThenBy(g => g.Left).Cast<TaskbarGap?>().FirstOrDefault();
-            _window.Dock(gap); // no room in the taskbar: stay above it
+            var result = t.Result;
+            DebugLog.Write($"Smart position for {fg.Process}: {result.Chosen?.ToString() ?? "nowhere clear, staying small"}");
+            Settle(request, preferred, moved: result.Chosen == preferred ? null : result.Chosen,
+                hide: false, squeezed: result.Chosen is null, result.Gap, result.GapKnown);
+
+            // Chromium apps only describe their controls a moment after first being asked, and a
+            // just-opened window may still be loading: look once more, a little later.
+            if (result.Probed && _warmedUp != fg.Hwnd)
+            {
+                _warmedUp = fg.Hwnd;
+                _recheckTimer ??= Timer(TimeSpan.FromMilliseconds(1200), () =>
+                {
+                    _recheckTimer!.Stop();
+                    ApplyPlacement();
+                });
+                _recheckTimer.Restart();
+            }
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
+    /// <summary>Carries out a decision: where the island is, whether it is hidden, whether it stays small.</summary>
+    private void Settle(int request, Placement preferred, Placement? moved, bool hide, bool squeezed, TaskbarGap? gap = null, bool gapKnown = false)
+    {
+        if (request != _placeRequest || _state is State.Expanded or State.Banner or State.Toast || _window.IsDragging)
+        {
+            return;
+        }
+
+        // The taskbar spot needs to know where the free space is.
+        if ((moved ?? preferred) == Placement.Taskbar && !gapKnown)
+        {
+            var minGap = MinGapWidth;
+            Task.Run(() => BestGap(minGap)).ContinueWith(
+                t => Settle(request, preferred, moved, hide, squeezed, t.IsFaulted ? null : t.Result, gapKnown: true),
+                TaskScheduler.FromCurrentSynchronizationContext());
+            return;
+        }
+
+        _squeezed = squeezed;
+        if (_hiddenByApp != hide)
+        {
+            _hiddenByApp = hide;
+            UpdateVisibility();
+        }
+
+        _window.MoveTo(preferred, moved, gap);
+        RefreshQuiet();
+    }
+
+    private int MinGapWidth => (int)Math.Round(100 * _window.ScaleFactor);
+
+    /// <summary>The widest free stretch of the taskbar; on a tie, the leftmost (where Windows puts the weather widget).</summary>
+    private static TaskbarGap? BestGap(int minWidth) =>
+        TaskbarLayout.FindGaps(minWidth)?.OrderByDescending(g => g.Width).ThenBy(g => g.Left).Cast<TaskbarGap?>().FirstOrDefault();
+
+    // ------------------------------------------------------------------ Staying compact
+
+    /// <summary>
+    /// Compact: activities show as the thin line and nothing opens on its own, except "needs you".
+    /// Pointing at the line shows the pill; clicking opens the panel as usual.
+    /// </summary>
+    private bool Quiet =>
+        _settings.Positioning.AlwaysCompact || _appCompact || _squeezed ||
+        SmartPlacement.IsCompactTime(_settings.Positioning.CompactHours, TimeOnly.FromDateTime(DateTime.Now));
+
+    private void RefreshQuiet()
+    {
+        var quiet = Quiet;
+        if (quiet != _lastQuiet)
+        {
+            _lastQuiet = quiet;
+            DebugLog.Write($"Compact {quiet}");
+            Render();
+        }
+    }
+
+    // ------------------------------------------------------------------ The user's choices
+
+    public void SetPlacement(Placement placement)
+    {
+        _settings.Placement = placement;
+        _save();
+        _placedByUserFor = IntPtr.Zero;
+        ApplyPlacement();
+    }
+
+    public void SetMode(PositionMode mode)
+    {
+        _settings.Positioning.Mode = mode;
+        _save();
+        _placedByUserFor = IntPtr.Zero;
+        ApplyPlacement();
+    }
+
+    public void SetDraggable(bool on)
+    {
+        _settings.Positioning.Draggable = on;
+        _save();
+        Render();
+    }
+
+    public void SetAlwaysCompact(bool on)
+    {
+        _settings.Positioning.AlwaysCompact = on;
+        _save();
+        RefreshQuiet();
+    }
+
+    private void OnDragStarted()
+    {
+        _peekTimer.Stop();
+        _placeRequest++; // a decision still on its way must not pull the island out of the user's hand
+    }
+
+    /// <summary>The user dropped the island: that is now its preferred spot, and it stays there in this app.</summary>
+    private void OnDragEnded(Placement placement, double x, double y, string? monitor)
+    {
+        _settings.Placement = placement;
+        if (placement == Placement.Custom)
+        {
+            _settings.Positioning.CustomX = x;
+            _settings.Positioning.CustomY = y;
+            _settings.Positioning.CustomMonitor = monitor;
+            _window.CustomX = x;
+            _window.CustomY = y;
+            _window.CustomMonitor = monitor;
+        }
+
+        _save();
+        _placedByUserFor = _foreground?.Hwnd ?? IntPtr.Zero;
+        _squeezed = false;
+        _placeRequest++;
+        _window.MoveTo(placement, moved: null, gap: null);
+        RefreshQuiet();
+    }
+
+    /// <summary>The "Position" menu: where the island lives and how it keeps out of the way.</summary>
+    public void OpenPositionMenu()
+    {
+        var pos = _settings.Positioning;
+        var menu = new ContextMenu();
+
+        void Spot(string header, Placement placement) =>
+            menu.Items.Add(Item(header, _settings.Placement == placement ? "check" : "", () => SetPlacement(placement)));
+
+        Spot("Bottom centre", Placement.AboveTaskbar);
+        Spot("Bottom left", Placement.BottomLeft);
+        Spot("Bottom right", Placement.BottomRight);
+        Spot("Top centre", Placement.TopCenter);
+        Spot("Inside the taskbar", Placement.Taskbar);
+        if (_settings.Placement == Placement.Custom)
+        {
+            menu.Items.Add(Item("Where you dragged it", "check", () => { }));
+        }
+
+        menu.Items.Add(new Separator());
+
+        void Mode(string header, PositionMode mode) =>
+            menu.Items.Add(Item(header, pos.Mode == mode ? "check" : "", () => SetMode(mode)));
+
+        Mode("Move out of the way of apps", PositionMode.Smart);
+        Mode("Hide when an app covers it", PositionMode.AutoHide);
+        Mode("Always stay put", PositionMode.Fixed);
+        menu.Items.Add(new Separator());
+
+        menu.Items.Add(Item("Drag to move", pos.Draggable ? "check" : "", () => SetDraggable(!pos.Draggable)));
+        menu.Items.Add(Item("Stay put in browsers", pos.StayInBrowsers ? "check" : "", () =>
+        {
+            pos.StayInBrowsers = !pos.StayInBrowsers;
+            _save();
+            ApplyPlacement();
+        }));
+        menu.Items.Add(Item("Always compact", pos.AlwaysCompact ? "check" : "", () => SetAlwaysCompact(!pos.AlwaysCompact)));
+
+        OpenMenu(menu, null);
+    }
+
+    /// <summary>Hidden by the user or a fullscreen app always wins; hidden for an app gives way to "needs you".</summary>
+    private bool ShouldShow => !_hiddenByUser && !_hiddenByFullscreen && (!_hiddenByApp || _showForAttention);
+
     private void UpdateVisibility()
     {
-        var shouldShow = !_hiddenByUser && !_hiddenByFullscreen;
+        var shouldShow = ShouldShow;
         if (shouldShow && !_visible)
         {
             _visible = true;
@@ -324,7 +632,7 @@ public sealed class IslandController
     {
         _toastTimer.Stop();
         _state = State.Collapsed;
-        if (_hiddenByUser || _hiddenByFullscreen)
+        if (!ShouldShow)
         {
             _visible = false;
             _window.Sink(Render);
@@ -334,7 +642,7 @@ public sealed class IslandController
             Render();
         }
 
-        ScheduleDock();
+        SchedulePlacement();
     }
 
     private void CheckHiddenUntil()
@@ -412,6 +720,7 @@ public sealed class IslandController
 
     private void RenderOnce()
     {
+        _window.CanDrag = _visible && _settings.Positioning.Draggable && _state is State.Collapsed or State.Peek;
         if (!_visible)
         {
             NotifyPanel(null);
@@ -442,7 +751,8 @@ public sealed class IslandController
                     PanelKind.Why => _why,
                     _ => _panelMode!.PanelView,
                 };
-                scene = new Scene(SurfaceShape.Panel, view, Attention: _panelKind == PanelKind.Mode && _panelMode!.HasAttentionEdge);
+                scene = new Scene(SurfaceShape.Panel, view, Attention: _panelKind == PanelKind.Mode && _panelMode!.HasAttentionEdge,
+                    AttentionBrush: _panelKind == PanelKind.Mode ? _panelMode!.AttentionBrush : null);
                 break;
 
             case State.Banner when _bannerMode?.BannerView is { } banner:
@@ -458,12 +768,17 @@ public sealed class IslandController
                 {
                     scene = new Scene(SurfaceShape.Resting);
                 }
+                else if (Quiet && !_revealed && primary.Activity?.Priority.IsUrgent() != true)
+                {
+                    // Compact: the activity is there, but only as the line, until the pointer asks for more.
+                    scene = new Scene(SurfaceShape.Resting);
+                }
                 else
                 {
                     var frame = Frame(primary);
                     frame.Overflow = _layout.OverflowCount;
                     var secondary = _layout.Secondary is { } s ? Mode(s.ModeId) : null;
-                    scene = new Scene(SurfaceShape.Pill, frame, primary.HasAttentionEdge, secondary?.BubbleView);
+                    scene = new Scene(SurfaceShape.Pill, frame, primary.HasAttentionEdge, secondary?.BubbleView, primary.AttentionBrush);
                 }
 
                 break;
@@ -511,8 +826,15 @@ public sealed class IslandController
 
         EndExpansion();
         _state = State.Collapsed;
+        if (_showForAttention)
+        {
+            // It only came out for "needs you"; the app that hides it is still in front.
+            _showForAttention = false;
+            UpdateVisibility();
+        }
+
         Render();
-        ScheduleDock(); // a dock change may have waited for the panel to close
+        SchedulePlacement(); // a move may have waited for the panel to close
     }
 
     private void EndExpansion()
@@ -552,7 +874,7 @@ public sealed class IslandController
         {
             EndBanner();
             Render();
-            ScheduleDock();
+            SchedulePlacement();
         }
         else
         {
@@ -578,6 +900,13 @@ public sealed class IslandController
 
     private void OnMoment(IslandMode mode, MomentKind kind)
     {
+        if (!_visible && kind == MomentKind.Attention && _hiddenByApp && !_hiddenByUser && !_hiddenByFullscreen)
+        {
+            // Hidden only to keep out of an app's way: "needs you" is essential, so come out for it.
+            _showForAttention = true;
+            UpdateVisibility();
+        }
+
         if (!_visible || _state == State.Toast)
         {
             return; // Hidden: state is kept and shows when the island comes back.
@@ -588,6 +917,11 @@ public sealed class IslandController
             // "Agent needs you" always expands, even during focus or over another panel.
             Expand(PanelKind.Mode, mode, byUser: false, MomentKind.Attention);
             return;
+        }
+
+        if (Quiet)
+        {
+            return; // Compact: nothing but "needs you" opens on its own.
         }
 
         if (_state == State.Expanded && _userExpanded)
@@ -617,7 +951,7 @@ public sealed class IslandController
 
     private void OnPointerEntered()
     {
-        if (_state == State.Collapsed && _layout.Primary is null && _visible)
+        if (_state == State.Collapsed && _visible && !_window.IsDragging && (_layout.Primary is null || (Quiet && !_revealed)))
         {
             _peekTimer.Restart();
         }
@@ -631,6 +965,17 @@ public sealed class IslandController
     private void OnPointerExited()
     {
         _peekTimer.Stop();
+        if (_window.IsDragging)
+        {
+            return;
+        }
+
+        if (_revealed)
+        {
+            _revealed = false;
+            Render();
+        }
+
         if (_state == State.Peek)
         {
             _state = State.Collapsed;
@@ -641,10 +986,20 @@ public sealed class IslandController
     private void OnPeekTimer()
     {
         _peekTimer.Stop();
-        if (_state == State.Collapsed && _layout.Primary is null && _window.IsPointerOver)
+        if (_state != State.Collapsed || !_window.IsPointerOver || _window.IsDragging)
+        {
+            return;
+        }
+
+        if (_layout.Primary is null)
         {
             _idle.Refresh();
             _state = State.Peek;
+            Render();
+        }
+        else if (Quiet && !_revealed)
+        {
+            _revealed = true; // compact: pointing at the line shows what is going on
             Render();
         }
     }
@@ -738,6 +1093,7 @@ public sealed class IslandController
             menu.Items.Add(Item("Why am I seeing this?", "info", () => ShowWhy(primary)));
         }
 
+        menu.Items.Add(Item("Position…", "location", () => _window.Dispatcher.BeginInvoke(OpenPositionMenu, DispatcherPriority.ApplicationIdle)));
         menu.Items.Add(Item("Choose what shows…", "settings", OpenSettingsFile));
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Hide Nexus", "eyeOff", () => Hide(until: null), gesture: _hideShortcut));

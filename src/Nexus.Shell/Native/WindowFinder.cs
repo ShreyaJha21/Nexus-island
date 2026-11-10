@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows.Automation;
+using Nexus.Core.Positioning;
 
 namespace Nexus.Shell.Native;
 
@@ -83,32 +86,70 @@ internal static class WindowFinder
         return true;
     }
 
-    private static readonly HashSet<string> BrowserProcesses = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "chrome", "msedge", "brave", "firefox", "opera", "opera_gx", "vivaldi", "arc", "zen", "floorp",
-    };
-
     /// <summary>
-    /// Which site a browser is playing music from, read from its window titles: YouTube titles its
-    /// tabs "&lt;video&gt; - YouTube", YouTube Music "&lt;song&gt; - YouTube Music", and so on. A window whose
-    /// title contains the track title wins; otherwise any browser window showing one of these sites.
-    /// Returns "youtube", "youtubemusic", "spotify", "soundcloud" or null.
+    /// Which site a browser is playing music from. Windows' media session only names the browser, so
+    /// this reads titles: YouTube titles its tabs "&lt;video&gt; - YouTube", YouTube Music
+    /// "&lt;song&gt; - YouTube Music", SoundCloud "... | SoundCloud", and Spotify's web player
+    /// "&lt;song&gt; • &lt;artist&gt;". In order:
+    /// <list type="number">
+    /// <item>a browser window whose title names the track (the playing tab is the active one);</item>
+    /// <item>a tab, in any browser window, whose title names the track: music often plays in a
+    /// background tab while you browse another, and the tab strip still lists it (UI Automation);</item>
+    /// <item>any browser window showing one of these sites.</item>
+    /// </list>
+    /// Returns "youtube", "youtubemusic", "spotify", "soundcloud" or null. Reads other apps' UI, which
+    /// can take a few hundred milliseconds: call it off the UI thread.
     /// </summary>
-    public static string? MusicSite(string appId, string trackTitle)
+    public static string? MusicSite(string appId, string trackTitle, string artist)
     {
-        string? bestMatch = null;
+        var windows = BrowserWindows();
         string? anySite = null;
 
+        foreach (var (_, title) in windows)
+        {
+            var site = SiteFromTitle(title, trackTitle, artist);
+            if (site is null)
+            {
+                continue;
+            }
+
+            anySite ??= site;
+            if (NamesTrack(title, trackTitle))
+            {
+                return site;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(trackTitle))
+        {
+            foreach (var (hwnd, _) in windows)
+            {
+                foreach (var tab in TabTitles(hwnd))
+                {
+                    if (NamesTrack(tab, trackTitle) && SiteFromTitle(tab, trackTitle, artist) is { } site)
+                    {
+                        return site;
+                    }
+                }
+            }
+        }
+
+        return anySite;
+    }
+
+    /// <summary>Visible top-level browser windows, front to back, with their titles.</summary>
+    private static List<(IntPtr Hwnd, string Title)> BrowserWindows()
+    {
+        var found = new List<(IntPtr, string)>();
         Win32.EnumWindows((hwnd, _) =>
         {
-            if (!Win32.IsWindowVisible(hwnd))
+            if (!Win32.IsWindowVisible(hwnd) || Win32.GetWindow(hwnd, Win32.GW_OWNER) != IntPtr.Zero)
             {
                 return true;
             }
 
             var title = Win32.WindowText(hwnd);
-            var site = SiteFromTitle(title);
-            if (site is null)
+            if (title.Length == 0)
             {
                 return true;
             }
@@ -117,30 +158,47 @@ internal static class WindowFinder
             try
             {
                 using var process = Process.GetProcessById((int)pid);
-                if (!BrowserProcesses.Contains(process.ProcessName))
+                if (SmartPlacement.IsBrowser(process.ProcessName))
                 {
-                    return true;
+                    found.Add((hwnd, title));
                 }
             }
-            catch (ArgumentException)
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {
-                return true;
-            }
-
-            anySite ??= site;
-            if (!string.IsNullOrWhiteSpace(trackTitle) && title.Contains(trackTitle, StringComparison.OrdinalIgnoreCase))
-            {
-                bestMatch = site;
-                return false; // found the tab that is playing
             }
 
             return true;
         }, IntPtr.Zero);
-
-        return bestMatch ?? anySite;
+        return found;
     }
 
-    private static string? SiteFromTitle(string title)
+    /// <summary>The titles of a browser window's tabs, as its tab strip reports them to UI Automation.</summary>
+    private static IEnumerable<string> TabTitles(IntPtr window)
+    {
+        var titles = new List<string>();
+        try
+        {
+            var tabs = AutomationElement.FromHandle(window).FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem));
+            foreach (AutomationElement tab in tabs)
+            {
+                if (tab.Current.Name is { Length: > 0 } name)
+                {
+                    titles.Add(name);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is ElementNotAvailableException or COMException or InvalidOperationException or TimeoutException)
+        {
+        }
+
+        return titles;
+    }
+
+    private static bool NamesTrack(string title, string track) =>
+        !string.IsNullOrWhiteSpace(track) && title.Contains(track.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static string? SiteFromTitle(string title, string track, string artist)
     {
         if (title.Contains("YouTube Music", StringComparison.OrdinalIgnoreCase))
         {
@@ -152,14 +210,17 @@ internal static class WindowFinder
             return "youtube";
         }
 
-        if (title.Contains("Spotify", StringComparison.OrdinalIgnoreCase))
-        {
-            return "spotify";
-        }
-
         if (title.Contains("SoundCloud", StringComparison.OrdinalIgnoreCase))
         {
             return "soundcloud";
+        }
+
+        // Spotify's web player titles the tab "<song> • <artist>" while it plays.
+        if (title.Contains("Spotify", StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(track) && title.Contains($"{track.Trim()} • ", StringComparison.OrdinalIgnoreCase) &&
+             (string.IsNullOrWhiteSpace(artist) || title.Contains(artist.Trim(), StringComparison.OrdinalIgnoreCase))))
+        {
+            return "spotify";
         }
 
         return null;

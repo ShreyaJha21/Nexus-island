@@ -91,10 +91,21 @@ public sealed class AgentMode : IslandMode
 
     public override bool HasAttentionEdge => IsNeedsYou && _primary?.SnoozedUntil is null;
 
+    /// <summary>Claude Code speaks in Claude's colour; other agents use the standard accent and attention colours.</summary>
+    public bool IsClaude => IsClaudeAgent(_primary?.Agent);
+
+    public override Brush? AttentionBrush => IsClaude ? Res("Brush.Claude") : null;
+
+    /// <summary>"Needs you" text and icons.</summary>
+    public Brush AttentionTextBrush => AttentionFor(_primary?.Agent);
+
+    /// <summary>The agent's icon in the panel header.</summary>
+    public Brush AccentBrush => AccentFor(_primary?.Agent);
+
     // ---- Compact pill ----
 
     public string CompactIcon => IsMulti ? (IsNeedsYou ? "attention" : "bot") : IconFor(PrimaryState);
-    public Brush CompactIconBrush => IsMulti && !IsNeedsYou ? Res("Brush.Accent") : BrushFor(PrimaryState);
+    public Brush CompactIconBrush => IsMulti && !IsNeedsYou ? AccentFor(_primary?.Agent) : BrushFor(PrimaryState, _primary?.Agent);
 
     public string CompactTitle
     {
@@ -247,13 +258,21 @@ public sealed class AgentMode : IslandMode
         _ => "bot",
     };
 
-    internal static Brush BrushFor(AgentState state) => state switch
+    /// <summary>Done stays green and failed red whoever the agent is: those colours carry meaning.</summary>
+    internal static Brush BrushFor(AgentState state, string? agent) => state switch
     {
-        AgentState.NeedsYou => Res("Brush.Attention"),
+        AgentState.NeedsYou => AttentionFor(agent),
         AgentState.Done => Res("Brush.Success"),
         AgentState.Failed => Res("Brush.Critical"),
-        _ => Res("Brush.Accent"),
+        _ => AccentFor(agent),
     };
+
+    internal static bool IsClaudeAgent(string? agent) =>
+        agent is null || agent.Contains("Claude", StringComparison.OrdinalIgnoreCase);
+
+    internal static Brush AccentFor(string? agent) => Res(IsClaudeAgent(agent) ? "Brush.Claude" : "Brush.Accent");
+
+    internal static Brush AttentionFor(string? agent) => Res(IsClaudeAgent(agent) ? "Brush.Claude" : "Brush.Attention");
 
     internal static Brush Res(string key) =>
         Application.Current?.TryFindResource(key) as Brush ?? Brushes.White;
@@ -298,9 +317,9 @@ public sealed class AgentSessionRow : ObservableObject
         ? $"Needs permission: {cmd}"
         : _session.Detail;
     public string Icon => AgentMode.IconFor(_session.State);
-    public Brush IconBrush => AgentMode.BrushFor(_session.State);
+    public Brush IconBrush => AgentMode.BrushFor(_session.State, _session.Agent);
     public Brush DetailBrush => _session.State == AgentState.NeedsYou
-        ? AgentMode.Res("Brush.Attention")
+        ? AgentMode.AttentionFor(_session.Agent)
         : AgentMode.Res("Brush.TextSecondary");
     public bool CanDismiss => _session.State is AgentState.Failed or AgentState.Done;
     public string Time { get; private set; } = "";

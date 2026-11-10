@@ -87,6 +87,9 @@ public static class Motion
     public static readonly TimeSpan ReducedCrossfade = TimeSpan.FromMilliseconds(100);
     public static readonly TimeSpan Pulse = TimeSpan.FromMilliseconds(1000);
 
+    /// <summary>Repositioning: the island glides to its new spot (same spring as Rise, a little longer for the distance).</summary>
+    public static readonly TimeSpan Glide = TimeSpan.FromMilliseconds(420);
+
     /// <summary>Content fades in once the shape is 60% grown.</summary>
     public static readonly TimeSpan ContentInDelay = TimeSpan.FromMilliseconds(Expand.TotalMilliseconds * BouncySpringEase.TimeAt(0.6));
 

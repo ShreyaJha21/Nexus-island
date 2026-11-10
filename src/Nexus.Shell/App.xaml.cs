@@ -65,11 +65,22 @@ public partial class App : Application
         var theme = new SystemTheme(_settings.UseSystemAccent);
 
         _focus = new FocusMode(_settings, Save);
-        _music = new MusicMode(_settings, WindowFinder.MusicSite);
+        _music = new MusicMode(_settings, (app, title, artist) =>
+        {
+            var site = WindowFinder.MusicSite(app, title, artist);
+            DebugLog.Write($"Music site for {app}: {site ?? "unknown"}");
+            return site;
+        });
         _agent = new AgentMode(cwd => WindowFinder.FocusTerminal(cwd), OpenAgentSetup);
         StartAgentServer();
 
-        _window = new IslandWindow { Placement = _settings.Placement };
+        _window = new IslandWindow
+        {
+            Placement = _settings.Placement,
+            CustomX = _settings.Positioning.CustomX,
+            CustomY = _settings.Positioning.CustomY,
+            CustomMonitor = _settings.Positioning.CustomMonitor,
+        };
         var handle = new WindowInteropHelper(_window).EnsureHandle();
         theme.SetBackdrop(_window.BackdropKind);
 
@@ -99,9 +110,9 @@ public partial class App : Application
                 "Another app already uses this shortcut. Choose a different HideShortcut in Nexus settings (tray menu > Open settings file), then restart Nexus.");
         }
 
-        _fullscreen = new FullscreenWatcher(() => _window.Handle, () => _window.FloatingZone);
+        _fullscreen = new FullscreenWatcher(() => _window.Handle);
         _fullscreen.Changed += _controller.SetFullscreen;
-        _fullscreen.CoverageChanged += _controller.SetCovered;
+        _fullscreen.WorkspaceChanged += _controller.SetForeground;
         _fullscreen.ForegroundChanged += _window.EnsureTopmost;
         _fullscreen.ForegroundChanged += _controller.OnForegroundChanged;
 
@@ -250,14 +261,9 @@ public partial class App : Application
         menu.Items.Add(new Separator());
         menu.Items.Add(IslandController.Item(IsAgentConnected() ? "Claude Code: connected" : "Connect Claude Code…", "bot", OpenAgentSetup));
 
-        var top = _settings.Placement == Placement.TopCenter;
-        menu.Items.Add(IslandController.Item(top ? "Move above the taskbar" : "Move to top center", top ? "chevronDown" : "chevronUp", () =>
-        {
-            _settings.Placement = top ? Placement.AboveTaskbar : Placement.TopCenter;
-            _window.Placement = _settings.Placement;
-            Save();
-            _window.Reposition();
-        }));
+        // Opened once this menu has closed, so the two don't fight over the mouse.
+        menu.Items.Add(IslandController.Item("Position…", "location",
+            () => Dispatcher.BeginInvoke(_controller.OpenPositionMenu, DispatcherPriority.ApplicationIdle)));
 
         var startup = StartupRegistration.IsEnabled;
         menu.Items.Add(IslandController.Item("Start with Windows", startup ? "check" : "add", () => StartupRegistration.Set(!startup)));

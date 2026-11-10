@@ -52,6 +52,8 @@
     <SolidColorBrush x:Key="Brush.AccentFillPressed" Color="#FF0C3B5E" />
     <SolidColorBrush x:Key="Brush.OnAccent" Color="#FFFFFFFF" />
     <SolidColorBrush x:Key="Brush.Attention" Color="{StaticResource Color.Attention}" />
+    <!-- Claude's brand colour: Claude Code's working and "needs you" states. -->
+    <SolidColorBrush x:Key="Brush.Claude" Color="#FFD97757" />
     <SolidColorBrush x:Key="Brush.Critical" Color="{StaticResource Color.Critical}" />
     <SolidColorBrush x:Key="Brush.Success" Color="{StaticResource Color.Success}" />
 
@@ -155,6 +157,21 @@
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
                 <Setter Property="Background" Value="{DynamicResource Brush.AccentFillPressed}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Claude Code's primary action, in Claude's colour. Deeper than Brush.Claude so white text keeps
+         about 5:1 contrast. -->
+    <Style x:Key="Button.Claude" TargetType="Button" BasedOn="{StaticResource Button.Base}">
+        <Setter Property="Background" Value="#FFB05430" />
+        <Setter Property="Foreground" Value="{StaticResource Brush.OnAccent}" />
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#FFBE5D37" />
+            </Trigger>
+            <Trigger Property="IsPressed" Value="True">
+                <Setter Property="Background" Value="#FF96462A" />
             </Trigger>
         </Style.Triggers>
     </Style>

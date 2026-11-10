@@ -22,7 +22,8 @@ public sealed class MusicMode : IslandMode
     private static readonly TimeSpan PausedGrace = TimeSpan.FromSeconds(60);
 
     private readonly NexusSettings _settings;
-    private readonly Func<string, string, string?>? _siteResolver;
+    private readonly Func<string, string, string, string?>? _siteResolver;
+    private int _brandRequest;
     private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _progressTick;
     private readonly DispatcherTimer _graceTimer;
@@ -36,11 +37,12 @@ public sealed class MusicMode : IslandMode
     private DateTimeOffset _positionUpdatedAt;
 
     /// <param name="siteResolver">
-    /// For browser playback: given the browser's app id and the track title, returns the site playing it
-    /// ("youtube", "youtubemusic", "spotify", "soundcloud") or null. Windows' media session only says a
-    /// browser is playing, so the shell answers this from the browser's window titles.
+    /// For browser playback: given the browser's app id, the track title and the artist, returns the site
+    /// playing it ("youtube", "youtubemusic", "spotify", "soundcloud") or null. Windows' media session only
+    /// says a browser is playing, so the shell answers this from the browser's window and tab titles.
+    /// It may be slow (it reads the browser's tabs), so it is called off the UI thread.
     /// </param>
-    public MusicMode(NexusSettings settings, Func<string, string, string?>? siteResolver = null)
+    public MusicMode(NexusSettings settings, Func<string, string, string, string?>? siteResolver = null)
     {
         _settings = settings;
         _siteResolver = siteResolver;
@@ -161,7 +163,15 @@ public sealed class MusicMode : IslandMode
             return;
         }
 
-        AppId = _session.SourceAppUserModelId ?? "";
+        var appId = _session.SourceAppUserModelId ?? "";
+        if (appId != AppId)
+        {
+            // Another app: its colour is not this one's.
+            BrandBrush = null;
+            ServiceName = null;
+        }
+
+        AppId = appId;
         SourceText = $"Playing in {FriendlyAppName(AppId)}";
         _trackKey = ""; // re-resolve the service for the new session
         _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
@@ -295,15 +305,69 @@ public sealed class MusicMode : IslandMode
         OnPropertyChanged(nameof(HasTimeline));
     }
 
-    /// <summary>Works out which service is playing and picks its brand colour for the level meter.</summary>
+    /// <summary>
+    /// Works out which service is playing and picks its brand colour for the level meter. Apps say who
+    /// they are; for a browser the shell looks for the tab playing this track. A browser that has only
+    /// just started playing may not describe its tabs yet, so an unknown site is asked again twice,
+    /// 1.5 s apart. Until then the previous colour stays, so the bars don't flicker on every new song.
+    /// </summary>
     private void ResolveBrand()
     {
+        var request = ++_brandRequest;
         var id = AppId.ToLowerInvariant();
-        var site =
-            id.Contains("spotify") ? "spotify" :
-            id.Contains("applemusic") || id.Contains("apple music") ? "applemusic" :
-            IsBrowser(id) ? _siteResolver?.Invoke(AppId, Title) : null;
+        if (id.Contains("spotify"))
+        {
+            ApplyBrand("spotify");
+        }
+        else if (id.Contains("applemusic") || id.Contains("apple music"))
+        {
+            ApplyBrand("applemusic");
+        }
+        else if (IsBrowser(id) && _siteResolver is not null)
+        {
+            _ = ResolveInBrowserAsync(request, AppId, Title, Artist);
+        }
+        else
+        {
+            ApplyBrand(null);
+        }
+    }
 
+    private async Task ResolveInBrowserAsync(int request, string appId, string title, string artist)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(1500));
+            }
+
+            string? site;
+            try
+            {
+                site = await Task.Run(() => _siteResolver!(appId, title, artist));
+            }
+            catch (Exception)
+            {
+                site = null;
+            }
+
+            if (request != _brandRequest)
+            {
+                return; // a newer track is being resolved
+            }
+
+            if (site is not null || attempt == 2)
+            {
+                ApplyBrand(site);
+                OnAllPropertiesChanged();
+                return;
+            }
+        }
+    }
+
+    private void ApplyBrand(string? site)
+    {
         (ServiceName, var hex) = site switch
         {
             "youtube" => ("YouTube", "#FF0000"),

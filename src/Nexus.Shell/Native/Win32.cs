@@ -17,6 +17,7 @@ internal static class Win32
     public static readonly IntPtr HWND_MESSAGE = new(-3);
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOACTIVATE = 0x0010;
     public const uint SWP_NOOWNERZORDER = 0x0200;
 
@@ -112,6 +113,9 @@ internal static class Win32
         public int Left, Top, Right, Bottom;
         public readonly int Width => Right - Left;
         public readonly int Height => Bottom - Top;
+
+        public readonly bool Intersects(RECT other) =>
+            Left < other.Right && Right > other.Left && Top < other.Bottom && Bottom > other.Top;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -141,6 +145,54 @@ internal static class Win32
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+    /// <summary>MONITORINFO plus the display name, to find the same screen again later.</summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX
+    {
+        public uint cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetMonitorInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetMonitorInfoEx(IntPtr monitor, ref MONITORINFOEX info);
+
+    public delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, IntPtr rect, IntPtr data);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc callback, IntPtr data);
+
+    public static string MonitorName(IntPtr monitor)
+    {
+        var info = new MONITORINFOEX { cbSize = (uint)Marshal.SizeOf<MONITORINFOEX>() };
+        return GetMonitorInfoEx(monitor, ref info) ? info.szDevice : "";
+    }
+
+    /// <summary>The monitor with this display name, or zero when it is no longer connected.</summary>
+    public static IntPtr MonitorByName(string? name)
+    {
+        var found = IntPtr.Zero;
+        if (!string.IsNullOrEmpty(name))
+        {
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (monitor, _, _, _) =>
+            {
+                if (MonitorName(monitor) == name)
+                {
+                    found = monitor;
+                    return false;
+                }
+
+                return true;
+            }, IntPtr.Zero);
+        }
+
+        return found;
+    }
 
     [DllImport("shcore.dll")]
     public static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);

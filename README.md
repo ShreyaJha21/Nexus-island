@@ -26,6 +26,7 @@ Design: [Nexus Figma file](https://www.figma.com/design/qYAkTFWMdY8sChyhQeVNjX/N
 | F1 Focus timer (25/5, 50/10, custom), session-done banner, break | ✅ |
 | F3 Agent status for Claude Code (working, needs you, done, failed, several sessions) | ✅ |
 | F4 Music (any app that reports to Windows media controls), level bars in the service's colour | ✅ |
+| WhatsApp calls: ringing banner with decline and accept, call timer, mute, end, call ended, missed call | ✅ |
 | F6 Show/hide shortcut, hide for 1 h / until tomorrow, auto-hide over fullscreen apps | ✅ |
 | Tray menu, start with Windows | ✅ |
 | Cricket, Swatch, Calendar, system HUDs, settings UI, onboarding, installer | v1 (shown as disabled tiles in the launcher) |
@@ -120,6 +121,19 @@ All of it lives under `Positioning` in the settings file. A fuller example than 
 - `CompactHours` are times of day to stay compact. `DetectControls: false` turns UI Automation off and
   leaves only your rules.
 
+### WhatsApp calls
+
+A ringing call grows the island into a banner with the caller, **Decline** and **Accept**. It stays up
+until the call is answered, declined or missed, and comes out even in a focus session or compact mode.
+On the call, the pill shows a green timer, the caller, live level bars, and **mute** and **end call**
+buttons; muted, it says so in red. Afterwards it shows "Call ended" with the length for a few seconds,
+or "Missed call · Call back" until you call back or dismiss it. Click the pill for the call panel.
+
+WhatsApp has no API for this, so Nexus reads what WhatsApp itself shows (its call window, call bar and
+call notifications) through Windows' accessibility API, and the island's buttons press WhatsApp's own
+buttons. Nothing is sent anywhere and Nexus never touches call audio. It only looks while WhatsApp is
+playing sound, using the microphone, or showing a call window, so it costs nothing the rest of the time.
+
 ### Connect Claude Code
 
 Tray menu → **Connect Claude Code…** (or *Set up* in the launcher). Nexus shows the exact hook entries it
@@ -156,8 +170,9 @@ The island renders in software. A transparent, always-on-top WPF window on the G
 device alive (~210 MB). In software it stays around 65 MB, and an expand-and-collapse costs about 0.6 CPU-s,
 including keeping the blur window under the island while it animates. Set `NEXUS_RENDER=hardware` to compare.
 
-Developer switches: `NEXUS_DEBUG=1` writes a trace to `%TEMP%\nexus-debug.log`; `NEXUS_REDUCED_MOTION=1`
-forces the reduced-motion crossfades.
+Developer switches: `NEXUS_DEBUG=1` writes a trace to `%TEMP%\nexus-debug.log` (including what WhatsApp's call
+UI exposes); `NEXUS_REDUCED_MOTION=1` forces the reduced-motion crossfades; `NEXUS_CALL_APPS=myapp` watches a
+stand-in app instead of WhatsApp, for testing calls without touching real ones.
 
 ## Known gaps
 
@@ -175,6 +190,10 @@ forces the reduced-motion crossfades.
 - **Claude's colour.** Claude Code's working and "needs you" states (icon, edge, pulse, button) use Claude's
   coral. Done stays green and failed red, since those colours carry meaning. Other agents keep the accent
   and attention colours.
+- **WhatsApp calls depend on WhatsApp's interface.** Nexus looks for its English button names
+  ("Accept", "Decline", "Mute microphone", "End call"); another language or a redesign may need new names
+  in `CallReader`. A call ringing under 20 seconds and then stopping isn't counted as missed, because
+  declining on your phone looks the same. Other calling apps (Teams, Zoom) aren't covered yet.
 - **Accent colour follows Windows.** With a red or orange accent, primary buttons look red, and orange is
   also the "needs you" colour. Set `"UseSystemAccent": false` for Fluent blue.
 - **Collision detection is only as good as what apps tell Windows.** An app that doesn't describe its

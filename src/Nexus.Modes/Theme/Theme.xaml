@@ -214,6 +214,44 @@
         <Setter Property="Padding" Value="0" />
     </Style>
 
+    <!-- Round call buttons (Figma: Island / Call). 32 px by default; 24 px on the pill, 44 px in the panel.
+         A white wash on hover keeps the colour recognisable. -->
+    <Style x:Key="Button.Round" TargetType="Button">
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="#FF3D3D3D" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual.Fluent}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border CornerRadius="100" Background="{TemplateBinding Background}" />
+                        <Border x:Name="Wash" CornerRadius="100" Background="#26FFFFFF" Opacity="0" />
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Wash" Property="Opacity" Value="1" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Wash" Property="Opacity" Value="0.5" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Button.RoundSubtle" TargetType="Button" BasedOn="{StaticResource Button.Round}" />
+    <!-- Fluent's danger and success fills: white icons stay above 4.5:1 on both. -->
+    <Style x:Key="Button.Decline" TargetType="Button" BasedOn="{StaticResource Button.Round}">
+        <Setter Property="Background" Value="#FFC50F1F" />
+    </Style>
+    <Style x:Key="Button.Accept" TargetType="Button" BasedOn="{StaticResource Button.Round}">
+        <Setter Property="Background" Value="#FF0F7B0F" />
+    </Style>
+
     <!-- 24 px subtle icon button inside the compact island (music controls); Fluent 4 px control radius -->
     <Style x:Key="Button.IslandIcon" TargetType="Button">
         <Setter Property="Width" Value="24" />

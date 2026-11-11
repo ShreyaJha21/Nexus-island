@@ -26,6 +26,12 @@ public sealed class IslandController
     private enum PanelKind { Mode, Launcher, Why }
 
     private static readonly TimeSpan PeekDelay = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>
+    /// The pointer counts as gone only after this long outside the island. While the island changes
+    /// size under a resting pointer, Windows can report a leave that didn't happen.
+    /// </summary>
+    private static readonly TimeSpan LeaveGrace = TimeSpan.FromMilliseconds(180);
     private static readonly TimeSpan PanelIdle = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan MomentHold = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan BannerHold = TimeSpan.FromSeconds(8);
@@ -48,6 +54,7 @@ public sealed class IslandController
     private readonly WhyView _why;
 
     private readonly DispatcherTimer _peekTimer;
+    private readonly DispatcherTimer _leaveTimer;
     private readonly DispatcherTimer _idleTimer;
     private readonly DispatcherTimer _holdTimer;
     private readonly DispatcherTimer _toastTimer;
@@ -104,6 +111,7 @@ public sealed class IslandController
         _why = new WhyView { DataContext = _whyVm };
 
         _peekTimer = Timer(PeekDelay, OnPeekTimer);
+        _leaveTimer = Timer(LeaveGrace, OnLeaveTimer);
         _idleTimer = Timer(PanelIdle, OnPanelIdle);
         _holdTimer = Timer(MomentHold, OnHoldEnded);
         _toastTimer = Timer(ToastHold, OnToastEnded);
@@ -119,6 +127,12 @@ public sealed class IslandController
                 if (_state == State.Expanded && _panelKind == PanelKind.Mode && _panelMode == mode)
                 {
                     Collapse();
+                }
+                else if (_state == State.Banner && _bannerMode == mode)
+                {
+                    EndBanner();
+                    Render();
+                    SchedulePlacement();
                 }
             };
         }
@@ -900,9 +914,14 @@ public sealed class IslandController
 
     private void OnMoment(IslandMode mode, MomentKind kind)
     {
-        if (!_visible && kind == MomentKind.Attention && _hiddenByApp && !_hiddenByUser && !_hiddenByFullscreen)
+        // A ringing call and "agent needs you" are urgent: they come out even when the island keeps
+        // out of an app's way or stays compact, and over a panel you opened.
+        var urgent = kind == MomentKind.Attention || mode.Activity?.Priority.IsUrgent() == true;
+        DebugLog.Write($"Moment {kind} from {mode.Id} urgent={urgent}");
+
+        if (!_visible && urgent && _hiddenByApp && !_hiddenByUser && !_hiddenByFullscreen)
         {
-            // Hidden only to keep out of an app's way: "needs you" is essential, so come out for it.
+            // Hidden only to keep out of an app's way: this is essential, so come out for it.
             _showForAttention = true;
             UpdateVisibility();
         }
@@ -919,14 +938,14 @@ public sealed class IslandController
             return;
         }
 
-        if (Quiet)
+        if (Quiet && !urgent)
         {
-            return; // Compact: nothing but "needs you" opens on its own.
+            return; // Compact: nothing but urgent things opens on its own.
         }
 
-        if (_state == State.Expanded && _userExpanded)
+        if (_state == State.Expanded && _userExpanded && !urgent)
         {
-            return; // Never interrupt something the user opened.
+            return; // Never interrupt something the user opened, unless it's urgent.
         }
 
         if (_layout.Primary?.ModeId != mode.Id)
@@ -936,10 +955,23 @@ public sealed class IslandController
 
         if (kind == MomentKind.Banner && mode.BannerView is not null)
         {
+            if (_state == State.Expanded)
+            {
+                EndExpansion();
+            }
+
             _state = State.Banner;
             _bannerMode = mode;
             _holdTimer.Interval = BannerHold;
-            _holdTimer.Restart();
+            if (mode.KeepsMoment)
+            {
+                _holdTimer.Stop(); // stays until the mode ends it (a call is answered or stops ringing)
+            }
+            else
+            {
+                _holdTimer.Restart();
+            }
+
             Render();
             return;
         }
@@ -951,6 +983,7 @@ public sealed class IslandController
 
     private void OnPointerEntered()
     {
+        _leaveTimer.Stop();
         if (_state == State.Collapsed && _visible && !_window.IsDragging && (_layout.Primary is null || (Quiet && !_revealed)))
         {
             _peekTimer.Restart();
@@ -962,8 +995,16 @@ public sealed class IslandController
         }
     }
 
-    private void OnPointerExited()
+    private void OnPointerExited() => _leaveTimer.Restart();
+
+    private void OnLeaveTimer()
     {
+        if (_window.IsPointerOver)
+        {
+            return; // still here (keep checking: no second "leave" will come)
+        }
+
+        _leaveTimer.Stop();
         _peekTimer.Stop();
         if (_window.IsDragging)
         {
@@ -1006,6 +1047,7 @@ public sealed class IslandController
 
     private void OnClick()
     {
+        DebugLog.Write($"Click in {_state}");
         switch (_state)
         {
             case State.Collapsed or State.Peek:

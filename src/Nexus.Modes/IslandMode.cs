@@ -82,6 +82,12 @@ public abstract class IslandMode : ObservableObject
     /// <summary>Colour of the "needs you" edge and pulse, or null for the standard attention orange.</summary>
     public virtual Brush? AttentionBrush => null;
 
+    /// <summary>
+    /// The banner stays until the mode says otherwise (a ringing call), instead of closing after a few
+    /// seconds. The mode ends it with <see cref="RequestCollapse"/>.
+    /// </summary>
+    public virtual bool KeepsMoment => false;
+
     /// <summary>Called by the shell when this mode's panel opens or closes, so modes can tick only while visible.</summary>
     public virtual void OnPanelOpened() { }
 

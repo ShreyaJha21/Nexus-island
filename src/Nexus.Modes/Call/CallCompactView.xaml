@@ -1,0 +1,75 @@
+<UserControl x:Class="Nexus.Modes.Call.CallCompactView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Height="32" Padding="12,0,4,0">
+    <!-- Figma: Island / Call, State=Compact (Ongoing call 17:173, Call ended 17:220, Missed call 17:225),
+         plus mute and end call right on the pill. -->
+    <Grid>
+        <!-- Ringing, when something more urgent holds the banner -->
+        <StackPanel Orientation="Horizontal" Visibility="{Binding IsIncoming, Converter={StaticResource BoolToVisibility}}">
+            <c:NexusIcon Kind="{Binding CallIcon}" Foreground="{StaticResource Brush.Success}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Caller}" Style="{StaticResource Text.BodyStrong}" MaxWidth="160" Margin="8,0,0,0" />
+            <TextBlock Text="calling" Style="{StaticResource Text.Caption}" Margin="8,0,0,0" />
+            <Button Style="{StaticResource Button.Decline}" Width="24" Height="24" Margin="12,0,0,0"
+                    Command="{Binding DeclineCommand}" ToolTip="Decline" AutomationProperties.Name="Decline call">
+                <c:NexusIcon Kind="phoneEnd" Width="14" Height="14" />
+            </Button>
+            <Button Style="{StaticResource Button.Accept}" Width="24" Height="24" Margin="6,0,4,0"
+                    Command="{Binding AcceptCommand}" ToolTip="Accept" AutomationProperties.Name="Accept call">
+                <c:NexusIcon Kind="{Binding AcceptIcon}" Width="14" Height="14" />
+            </Button>
+        </StackPanel>
+
+        <!-- Calling someone -->
+        <StackPanel Orientation="Horizontal" Visibility="{Binding IsOutgoing, Converter={StaticResource BoolToVisibility}}">
+            <c:NexusIcon Kind="{Binding CallIcon}" Foreground="{StaticResource Brush.Success}" VerticalAlignment="Center" />
+            <TextBlock Text="Calling…" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" />
+            <TextBlock Text="{Binding ShortCaller}" Style="{StaticResource Text.Caption}" MaxWidth="120" Margin="8,0,0,0" />
+            <Button Style="{StaticResource Button.Decline}" Width="24" Height="24" Margin="12,0,4,0"
+                    Command="{Binding EndCommand}" ToolTip="End call" AutomationProperties.Name="End call">
+                <c:NexusIcon Kind="phoneEnd" Width="14" Height="14" />
+            </Button>
+        </StackPanel>
+
+        <!-- On the call: green timer, who, live level; or "Muted" -->
+        <StackPanel Orientation="Horizontal" Visibility="{Binding IsOngoing, Converter={StaticResource BoolToVisibility}}">
+            <c:NexusIcon Kind="{Binding CompactIcon}" Foreground="{Binding CompactIconBrush}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding DurationText}" Style="{StaticResource Text.BodyStrong}" Foreground="{StaticResource Brush.Success}"
+                       Margin="8,0,0,0" Visibility="{Binding ShowTalkingPill, Converter={StaticResource BoolToVisibility}}" />
+            <TextBlock Text="Muted" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0"
+                       Visibility="{Binding ShowMutedPill, Converter={StaticResource BoolToVisibility}}" />
+            <TextBlock Text="{Binding DurationText}" Style="{StaticResource Text.Caption}" Margin="8,0,0,0"
+                       Visibility="{Binding ShowMutedPill, Converter={StaticResource BoolToVisibility}}" />
+            <TextBlock Text="{Binding ShortCaller}" Style="{StaticResource Text.Caption}" MaxWidth="120" Margin="8,0,0,0"
+                       ToolTip="{Binding Caller}" Visibility="{Binding ShowTalkingPill, Converter={StaticResource BoolToVisibility}}" />
+            <c:LevelMeter IsActive="{Binding ShowLevel}" BarBrush="{StaticResource Brush.Success}" Margin="8,0,4,0"
+                          Visibility="{Binding ShowTalkingPill, Converter={StaticResource BoolToVisibility}}" />
+
+            <Button Style="{StaticResource Button.IslandIcon}" Command="{Binding ToggleMuteCommand}" Margin="4,0,0,0"
+                    ToolTip="{Binding MuteLabel}" AutomationProperties.Name="{Binding MuteLabel}"
+                    Visibility="{Binding CanMute, Converter={StaticResource BoolToVisibility}}">
+                <c:NexusIcon Kind="{Binding MuteIcon}" Width="14" Height="14" />
+            </Button>
+            <Button Style="{StaticResource Button.Decline}" Width="24" Height="24" Margin="4,0,4,0"
+                    Command="{Binding EndCommand}" ToolTip="End call" AutomationProperties.Name="End call">
+                <c:NexusIcon Kind="phoneEnd" Width="14" Height="14" />
+            </Button>
+        </StackPanel>
+
+        <!-- Just ended -->
+        <StackPanel Orientation="Horizontal" Margin="0,0,8,0" Visibility="{Binding IsEnded, Converter={StaticResource BoolToVisibility}}">
+            <c:NexusIcon Kind="phoneEnd" Foreground="{StaticResource Brush.TextSecondary}" VerticalAlignment="Center" />
+            <TextBlock Text="Call ended" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" />
+            <TextBlock Text="{Binding DurationText}" Style="{StaticResource Text.Caption}" Margin="8,0,0,0" />
+        </StackPanel>
+
+        <!-- Missed: stays until you call back or dismiss it -->
+        <StackPanel Orientation="Horizontal" Margin="0,0,8,0" Visibility="{Binding IsMissed, Converter={StaticResource BoolToVisibility}}">
+            <c:NexusIcon Kind="phone" Foreground="{StaticResource Brush.Critical}" VerticalAlignment="Center" />
+            <TextBlock Text="Missed call" Style="{StaticResource Text.BodyStrong}" Margin="8,0,0,0" />
+            <TextBlock Text="{Binding Caller}" Style="{StaticResource Text.Caption}" MaxWidth="140" Margin="8,0,0,0" />
+            <Button Style="{StaticResource Button.Link}" Content="Call back" Margin="10,0,0,0" Command="{Binding CallBackCommand}" />
+        </StackPanel>
+    </Grid>
+</UserControl>

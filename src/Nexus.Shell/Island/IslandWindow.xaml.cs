@@ -57,6 +57,15 @@ public partial class IslandWindow : Window
     private static readonly Size RestingSize = new(112, 10);
     private const double RestingRadius = 5;
 
+    /// <summary>How far the resting line's hover target reaches past each end of the line.</summary>
+    private const double RestingReachSide = 48;
+
+    /// <summary>How far the resting line's hover target reaches away from the screen edge it sits against.</summary>
+    private const double RestingReachAway = 22;
+
+    /// <summary>The same for the 32 px pill: a little extra above, and down to the screen edge.</summary>
+    private const double PillReachAway = 6;
+
     private IntPtr _hwnd;
     private FrameworkElement? _current;
     private FrameworkElement? _bubble;
@@ -256,7 +265,23 @@ public partial class IslandWindow : Window
 
     public bool IsDragging => _dragging;
 
-    public bool IsPointerOver => HitArea.IsMouseOver || Bubble.IsMouseOver;
+    /// <summary>
+    /// Whether the pointer is over the island. WPF's own IsMouseOver can lag behind while the window is
+    /// resized under the pointer, so this also checks the pointer's actual position.
+    /// </summary>
+    public bool IsPointerOver => HitArea.IsMouseOver || Bubble.IsMouseOver || CursorInside(HitArea) || CursorInside(Bubble);
+
+    private bool CursorInside(FrameworkElement element)
+    {
+        if (!element.IsVisible || element.ActualWidth <= 0 || PresentationSource.FromVisual(element) is null ||
+            !Win32.GetCursorPos(out var cursor))
+        {
+            return false;
+        }
+
+        var p = element.PointFromScreen(new Point(cursor.X, cursor.Y));
+        return p.X >= 0 && p.Y >= 0 && p.X <= element.ActualWidth && p.Y <= element.ActualHeight;
+    }
 
     public UIElement SurfaceElement => Surface;
 
@@ -1028,19 +1053,25 @@ public partial class IslandWindow : Window
 
         // The resting line is small, so its hit area is much larger than what is drawn: wide, tall,
         // and reaching all the way down to the taskbar edge so there is no dead gap below it.
-        // Against a side of the screen (or the start of a taskbar gap) the line sits right at that edge.
+        // The resting line and the pill share one generous hover target that reaches all the way to the
+        // screen edge they sit against (the taskbar, or the top of the screen), so there is no dead gap
+        // between them. It must not shrink out from under the pointer when hovering turns the line into
+        // the peek pill, or the two flip back and forth. Against a side of the screen (or the start of a
+        // taskbar gap) it stops at that edge.
         var docked = _docked;
-        var padLeft = _align == HAlign.Left ? 0 : 32;
-        var padRight = _align == HAlign.Right ? 0 : 32;
-        var padTop = _flushTop ? 0 : StageGap;
-        HitArea.Background = resting ? HitBrush : Brushes.Transparent;
-        HitArea.Padding = resting
-            ? (_anchorBottom ? new Thickness(padLeft, 18, padRight, StageGap) : new Thickness(padLeft, padTop, padRight, 18))
-            : new Thickness(0);
-        // At the top the hit area already starts at the screen edge, so flicking the pointer up works.
-        HitArea.Margin = !resting ? new Thickness(0)
-            : _anchorBottom ? new Thickness(0, 0, 0, -StageGap)
-            : new Thickness(0, -padTop, 0, 0);
+        var compact = shape is SurfaceShape.Resting or SurfaceShape.Pill;
+        var side = resting ? RestingReachSide : 0;
+        var away = resting ? RestingReachAway : PillReachAway;
+        var padLeft = _align == HAlign.Left ? 0 : side;
+        var padRight = _align == HAlign.Right ? 0 : side;
+        var edgeGap = _flushTop ? 0 : StageGap;
+        HitArea.Background = compact ? HitBrush : Brushes.Transparent;
+        HitArea.Padding = !compact ? new Thickness(0)
+            : _anchorBottom ? new Thickness(padLeft, away, padRight, edgeGap)
+            : new Thickness(padLeft, edgeGap, padRight, away);
+        HitArea.Margin = !compact ? new Thickness(0)
+            : _anchorBottom ? new Thickness(0, 0, 0, -edgeGap)
+            : new Thickness(0, -edgeGap, 0, 0);
         HitArea.Cursor = resting ? Cursors.Hand : null;
 
         // Docked, the island is laid out for the 32 px pill centered on the taskbar; lift the thinner

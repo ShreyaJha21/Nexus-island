@@ -1,0 +1,27 @@
+<UserControl x:Class="Nexus.Modes.Call.CallBannerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Height="56" Padding="12,0">
+    <!-- Figma: Island / Call, State=Banner (Incoming voice call 17:146, Incoming video call 17:159).
+         Stays up until the call is answered, declined or missed. -->
+    <StackPanel Orientation="Horizontal">
+        <Grid Width="32" Height="32" VerticalAlignment="Center">
+            <Ellipse Fill="{Binding AvatarBrush}" />
+            <TextBlock Text="{Binding Initials}" Style="{StaticResource Text.Caption}" FontWeight="SemiBold" Foreground="White"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Grid>
+        <StackPanel Margin="12,0,0,0" MinWidth="150" VerticalAlignment="Center">
+            <TextBlock Text="{Binding Caller}" Style="{StaticResource Text.BodyStrong}" MaxWidth="180" ToolTip="{Binding Caller}" />
+            <TextBlock Text="{Binding AppLine}" Style="{StaticResource Text.Caption}" />
+        </StackPanel>
+        <Button Style="{StaticResource Button.Decline}" Margin="16,0,0,0" Command="{Binding DeclineCommand}"
+                ToolTip="Decline" AutomationProperties.Name="Decline call">
+            <c:NexusIcon Kind="phoneEnd" />
+        </Button>
+        <Button Style="{StaticResource Button.Accept}" Margin="8,0,0,0" Command="{Binding AcceptCommand}"
+                ToolTip="Accept" AutomationProperties.Name="Accept call">
+            <c:NexusIcon Kind="{Binding AcceptIcon}" />
+        </Button>
+    </StackPanel>
+</UserControl>

@@ -11,6 +11,7 @@ using Nexus.Core.Focus;
 using Nexus.Core.Settings;
 using Nexus.Modes;
 using Nexus.Modes.Agent;
+using Nexus.Modes.Call;
 using Nexus.Modes.Focus;
 using Nexus.Modes.Music;
 using Nexus.Shell.Island;
@@ -33,6 +34,8 @@ public partial class App : Application
     private FocusMode _focus = null!;
     private AgentMode _agent = null!;
     private MusicMode _music = null!;
+    private CallMode _call = null!;
+    private CallWatcher? _calls;
     private HookSetupWindow? _setupWindow;
     private bool _hideShortcutAvailable;
     private bool _focusShortcutAvailable;
@@ -72,6 +75,9 @@ public partial class App : Application
             return site;
         });
         _agent = new AgentMode(cwd => WindowFinder.FocusTerminal(cwd), OpenAgentSetup);
+        _calls = new CallWatcher();
+        _call = new CallMode(_calls.PerformAsync, _calls.ShowApp);
+        _calls.Changed += _call.Update;
         StartAgentServer();
 
         _window = new IslandWindow
@@ -86,7 +92,7 @@ public partial class App : Application
 
         _controller = new IslandController(
             _window,
-            [_focus, _agent, _music],
+            [_focus, _agent, _call, _music],
             _settings,
             Save,
             agentConnected: IsAgentConnected,
@@ -121,6 +127,7 @@ public partial class App : Application
 
         _controller.Start();
         _fullscreen.Check();
+        _calls.Start();
 
         await _music.StartAsync();
     }
@@ -128,6 +135,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _fullscreen?.Dispose();
+        _calls?.Dispose();
         _hotkeys?.Dispose();
         _tray?.Dispose();
         _server?.Dispose();

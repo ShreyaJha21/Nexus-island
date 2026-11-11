@@ -1,0 +1,100 @@
+<UserControl x:Class="Nexus.Modes.Call.CallPanelView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Width="360" Padding="16">
+    <!-- Figma: Island / Call, State=Panel · Ongoing call (17:249) -->
+    <StackPanel>
+        <StackPanel Orientation="Horizontal">
+            <Grid Width="48" Height="48" VerticalAlignment="Center">
+                <Ellipse Fill="{Binding AvatarBrush}" />
+                <TextBlock Text="{Binding Initials}" Style="{StaticResource Text.Body}" FontSize="16" FontWeight="SemiBold" Foreground="White"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+            <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="{Binding Caller}" Style="{StaticResource Text.Subtitle}" MaxWidth="260" TextTrimming="CharacterEllipsis" />
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding StatusLine}" Style="{StaticResource Text.Caption}" Foreground="{Binding StatusBrush}" />
+                    <c:LevelMeter IsActive="{Binding ShowLevel}" BarBrush="{StaticResource Brush.Success}" Margin="8,0,0,0"
+                                  Visibility="{Binding ShowLevel, Converter={StaticResource BoolToVisibility}}" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Ringing -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0"
+                    Visibility="{Binding IsIncoming, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel Margin="16,0">
+                <Button Style="{StaticResource Button.Decline}" Width="44" Height="44" Command="{Binding DeclineCommand}"
+                        AutomationProperties.Name="Decline call">
+                    <c:NexusIcon Kind="phoneEnd" />
+                </Button>
+                <TextBlock Text="Decline" Style="{StaticResource Text.Caption}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+            </StackPanel>
+            <StackPanel Margin="16,0">
+                <Button Style="{StaticResource Button.Accept}" Width="44" Height="44" Command="{Binding AcceptCommand}"
+                        AutomationProperties.Name="Accept call">
+                    <c:NexusIcon Kind="{Binding AcceptIcon}" />
+                </Button>
+                <TextBlock Text="Accept" Style="{StaticResource Text.Caption}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- On the call, or calling -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0"
+                    Visibility="{Binding IsLive, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel Margin="12,0" Visibility="{Binding CanMute, Converter={StaticResource BoolToVisibility}}">
+                <Button Width="44" Height="44" Command="{Binding ToggleMuteCommand}" AutomationProperties.Name="{Binding MuteLabel}">
+                    <Button.Style>
+                        <!-- Muted: the button turns blue, like the Figma "Unmute" state -->
+                        <Style TargetType="Button" BasedOn="{StaticResource Button.RoundSubtle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsMuted}" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource Brush.AccentFill}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                    <c:NexusIcon Kind="{Binding MuteIcon}" />
+                </Button>
+                <TextBlock Text="{Binding MuteLabel}" Style="{StaticResource Text.Caption}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+            </StackPanel>
+            <StackPanel Margin="12,0">
+                <Button Style="{StaticResource Button.RoundSubtle}" Width="44" Height="44" Command="{Binding OpenAppCommand}"
+                        AutomationProperties.Name="Open WhatsApp">
+                    <c:NexusIcon Kind="{Binding CallIcon}" />
+                </Button>
+                <TextBlock Text="WhatsApp" Style="{StaticResource Text.Caption}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+            </StackPanel>
+            <StackPanel Margin="12,0">
+                <Button Style="{StaticResource Button.Decline}" Width="44" Height="44" Command="{Binding EndCommand}"
+                        AutomationProperties.Name="End call">
+                    <c:NexusIcon Kind="phoneEnd" />
+                </Button>
+                <TextBlock Text="End" Style="{StaticResource Text.Caption}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Missed -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0"
+                    Visibility="{Binding IsMissed, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel Margin="16,0">
+                <Button Style="{StaticResource Button.Accept}" Width="44" Height="44" Command="{Binding CallBackCommand}"
+                        AutomationProperties.Name="Call back">
+                    <c:NexusIcon Kind="phone" />
+                </Button>
+                <TextBlock Text="Call back" Style="{StaticResource Text.Caption}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+            </StackPanel>
+            <StackPanel Margin="16,0">
+                <Button Style="{StaticResource Button.RoundSubtle}" Width="44" Height="44" Command="{Binding DismissCommand}"
+                        AutomationProperties.Name="Dismiss">
+                    <c:NexusIcon Kind="dismiss" />
+                </Button>
+                <TextBlock Text="Dismiss" Style="{StaticResource Text.Caption}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+            </StackPanel>
+        </StackPanel>
+
+        <TextBlock Text="Controls hand off to WhatsApp's own call window; Nexus mirrors status." Style="{StaticResource Text.Caption}"
+                   TextWrapping="Wrap" Margin="0,16,0,0" />
+    </StackPanel>
+</UserControl>

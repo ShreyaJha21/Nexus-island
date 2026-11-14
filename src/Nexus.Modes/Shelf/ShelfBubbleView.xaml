@@ -1,0 +1,18 @@
+<UserControl x:Class="Nexus.Modes.Shelf.ShelfBubbleView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             c:IslandInput.OwnsDrag="True" Background="Transparent" AutomationProperties.Name="Shelf: drag into any app">
+    <!-- 32 px detached bubble: the newest item, still draggable out -->
+    <Border Width="20" Height="20" CornerRadius="4" Background="{StaticResource Brush.Subtle}">
+        <Grid DataContext="{Binding Items[0]}">
+            <Border CornerRadius="4" Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVisibility}}">
+                <Border.Background>
+                    <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill" />
+                </Border.Background>
+            </Border>
+            <c:NexusIcon Kind="note" Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Visibility="{Binding IsText, Converter={StaticResource BoolToVisibility}}" />
+        </Grid>
+    </Border>
+</UserControl>

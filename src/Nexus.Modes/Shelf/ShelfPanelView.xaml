@@ -1,0 +1,73 @@
+<UserControl x:Class="Nexus.Modes.Shelf.ShelfPanelView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:c="clr-namespace:Nexus.Modes.Controls"
+             Width="360" Padding="16">
+    <!-- The shelf, opened: every item as a tile. Drag a tile into any app; hover for remove. -->
+    <StackPanel>
+        <DockPanel>
+            <c:NexusIcon Kind="copy" Width="20" Height="20" Foreground="{DynamicResource Brush.Accent}" DockPanel.Dock="Left" />
+            <Button Style="{StaticResource Button.Link}" Content="Clear all" Command="{Binding ClearCommand}" DockPanel.Dock="Right"
+                    VerticalAlignment="Center" />
+            <StackPanel Orientation="Horizontal" Margin="8,0,8,0" VerticalAlignment="Center">
+                <TextBlock Text="Shelf" Style="{StaticResource Text.BodyStrong}" />
+                <TextBlock Text="{Binding ExpiryText}" Style="{StaticResource Text.Caption}" Margin="8,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </DockPanel>
+
+        <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,12,-8,0" Focusable="False">
+            <ItemsControl ItemsSource="{Binding Items}" Focusable="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid x:Name="Tile" Width="72" Margin="0,0,8,8" Background="Transparent" Cursor="Hand"
+                              c:IslandInput.OwnsDrag="True" ToolTip="{Binding ToolTipText}"
+                              Loaded="OnTileLoaded" AutomationProperties.Name="{Binding Name}">
+                            <StackPanel>
+                                <Border Width="72" Height="72" CornerRadius="6" Background="{StaticResource Brush.Subtle}"
+                                        BorderBrush="{StaticResource Brush.StrokeSurface}" BorderThickness="1">
+                                    <Grid>
+                                        <!-- Photos fill the tile; file icons sit centred at their own size. -->
+                                        <Border CornerRadius="5" Visibility="{Binding IsImage, Converter={StaticResource BoolToVisibility}}">
+                                            <Border.Background>
+                                                <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                            </Border.Background>
+                                        </Border>
+                                        <Image Source="{Binding Thumbnail}" Width="32" Height="32"
+                                               Visibility="{Binding IsImage, Converter={StaticResource InverseBoolToVisibility}}" />
+                                        <TextBlock Text="{Binding Item.Text}" Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextPrimary}"
+                                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" Margin="6"
+                                                   Visibility="{Binding IsText, Converter={StaticResource BoolToVisibility}}" />
+                                    </Grid>
+                                </Border>
+                                <TextBlock Text="{Binding Name}" Style="{StaticResource Text.Caption}" TextTrimming="CharacterEllipsis"
+                                           Margin="0,4,0,0" HorizontalAlignment="Center" MaxWidth="72" />
+                            </StackPanel>
+
+                            <!-- Remove: shows on hover -->
+                            <Button x:Name="RemoveButton" Style="{StaticResource Button.Round}" Width="20" Height="20" Background="#E6292929"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-6,0" Visibility="Hidden"
+                                    Command="{Binding RemoveCommand}" ToolTip="Remove" AutomationProperties.Name="Remove">
+                                <c:NexusIcon Kind="dismiss" Width="12" Height="12" />
+                            </Button>
+                        </Grid>
+                        <DataTemplate.Triggers>
+                            <Trigger SourceName="Tile" Property="IsMouseOver" Value="True">
+                                <Setter TargetName="RemoveButton" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <TextBlock Style="{StaticResource Text.Caption}" TextWrapping="Wrap" Margin="0,4,0,0">
+            <Run Text="Drag an item into any app, or the whole pill to drop them all. Items stay for" />
+            <Run Text="{Binding KeepText, Mode=OneWay}" /><Run Text="." />
+        </TextBlock>
+    </StackPanel>
+</UserControl>

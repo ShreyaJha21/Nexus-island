@@ -49,6 +49,7 @@ public sealed class NexusSettings
     public FocusSettings Focus { get; set; } = new();
     public AgentSettings Agent { get; set; } = new();
     public MusicSettings Music { get; set; } = new();
+    public ShelfSettings Shelf { get; set; } = new();
 
     public string? PinnedModeId { get; set; }
 
@@ -142,6 +143,16 @@ public sealed class AgentSettings
 {
     public int Port { get; set; }
     public string Token { get; set; } = "";
+}
+
+/// <summary>The shelf: things dropped on the island, kept for a while to drag into another app.</summary>
+public sealed class ShelfSettings
+{
+    /// <summary>How long a dropped item stays.</summary>
+    public int KeepMinutes { get; set; } = 60;
+
+    /// <summary>The most items kept at once; the oldest goes first.</summary>
+    public int MaxItems { get; set; } = 20;
 }
 
 public sealed class MusicSettings

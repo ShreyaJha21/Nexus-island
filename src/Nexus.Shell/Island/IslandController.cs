@@ -10,6 +10,7 @@ using Nexus.Modes;
 using Nexus.Modes.Agent;
 using Nexus.Modes.Controls;
 using Nexus.Modes.Focus;
+using Nexus.Modes.Shelf;
 using Nexus.Shell.Native;
 using Nexus.Shell.Views;
 
@@ -23,7 +24,7 @@ namespace Nexus.Shell.Island;
 public sealed class IslandController
 {
     private enum State { Collapsed, Peek, Expanded, Banner, Toast }
-    private enum PanelKind { Mode, Launcher, Why }
+    private enum PanelKind { Mode, Launcher, Why, Drop }
 
     private static readonly TimeSpan PeekDelay = TimeSpan.FromMilliseconds(400);
 
@@ -52,6 +53,10 @@ public sealed class IslandController
     private readonly LauncherView _launcher;
     private readonly ToastView _toast;
     private readonly WhyView _why;
+    private readonly DropTargetView _dropView;
+    private readonly ShelfMode? _shelf;
+    private readonly DispatcherTimer _dropLeaveTimer;
+    private bool _dropOpen;
 
     private readonly DispatcherTimer _peekTimer;
     private readonly DispatcherTimer _leaveTimer;
@@ -109,6 +114,9 @@ public sealed class IslandController
         _launcher = new LauncherView { DataContext = _idle };
         _toast = new ToastView();
         _why = new WhyView { DataContext = _whyVm };
+        _shelf = modes.OfType<ShelfMode>().FirstOrDefault();
+        _dropView = new DropTargetView { KeepText = _shelf?.KeepText ?? "an hour" };
+        _dropLeaveTimer = Timer(TimeSpan.FromMilliseconds(200), OnDropLeaveTimer);
 
         _peekTimer = Timer(PeekDelay, OnPeekTimer);
         _leaveTimer = Timer(LeaveGrace, OnLeaveTimer);
@@ -146,6 +154,9 @@ public sealed class IslandController
         _window.PointerMoved += () => { if (_state == State.Expanded) _idleTimer.Restart(); };
         _window.EscapePressed += Collapse;
         _window.DragStarted += OnDragStarted;
+        _window.DropEntered += OnDropEntered;
+        _window.DropLeft += () => { if (_dropOpen) _dropLeaveTimer.Restart(); };
+        _window.Dropped += OnDropped;
         _window.DragEnded += OnDragEnded;
         _window.KeyboardDeactivated += () =>
         {
@@ -761,6 +772,7 @@ public sealed class IslandController
             case State.Expanded:
                 FrameworkElement view = _panelKind switch
                 {
+                    PanelKind.Drop => _dropView,
                     PanelKind.Launcher => _launcher,
                     PanelKind.Why => _why,
                     _ => _panelMode!.PanelView,
@@ -1098,6 +1110,84 @@ public sealed class IslandController
         {
             _panelMode = primary;
             Render();
+        }
+    }
+
+    // ================================================================== Dropping on the shelf
+
+    /// <summary>
+    /// Something is dragged over the island: open the drop zone, a big target that says what will
+    /// happen. Not for drags that start on the shelf itself, and never over a ringing call.
+    /// </summary>
+    private bool OnDropEntered(IDataObject data)
+    {
+        if (_shelf is null || !_visible || ShelfMode.IsDraggingOut || _state == State.Toast ||
+            (_state == State.Banner && _bannerMode?.KeepsMoment == true) || !ShelfMode.CanAccept(data))
+        {
+            return false;
+        }
+
+        _dropLeaveTimer.Stop();
+        if (!_dropOpen)
+        {
+            DebugLog.Write("Drop zone open");
+            _dropOpen = true;
+            if (_state == State.Banner)
+            {
+                EndBanner();
+            }
+
+            _peekTimer.Stop();
+            _holdTimer.Stop();
+            _idleTimer.Stop();
+            _state = State.Expanded;
+            _panelKind = PanelKind.Drop;
+            _panelMode = null;
+            _userExpanded = false;
+            Render();
+        }
+
+        return true;
+    }
+
+    private void OnDropLeaveTimer()
+    {
+        if (_window.IsPointerOver)
+        {
+            return; // still over the island (keep checking: a drag reports no second "leave")
+        }
+
+        _dropLeaveTimer.Stop();
+        CloseDropZone();
+    }
+
+    private void CloseDropZone()
+    {
+        if (!_dropOpen)
+        {
+            return;
+        }
+
+        _dropOpen = false;
+        if (_state == State.Expanded && _panelKind == PanelKind.Drop)
+        {
+            Collapse();
+        }
+    }
+
+    private async void OnDropped(IDataObject data)
+    {
+        _dropLeaveTimer.Stop();
+        var adding = _shelf!.AddAsync(data); // reads the drag now, while it is still readable
+        CloseDropZone();
+        try
+        {
+            var added = await adding;
+            DebugLog.Write($"Dropped: {added} kept");
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            DebugLog.Write($"Drop failed: {ex.Message}");
         }
     }
 

@@ -121,6 +121,22 @@ public partial class IslandWindow : Window
         HitArea.MouseLeave += (_, _) => PointerExited?.Invoke();
         Bubble.MouseLeftButtonUp += (_, e) => { BubbleClicked?.Invoke(); e.Handled = true; };
 
+        // Things dragged from other apps (a photo from a browser, files from Explorer) land on the shelf.
+        AllowDrop = true;
+        DragEnter += (_, e) => OnDropDrag(e, entering: true);
+        DragOver += (_, e) => OnDropDrag(e, entering: false);
+        DragLeave += (_, e) => { DropLeft?.Invoke(); e.Handled = true; };
+        Drop += (_, e) =>
+        {
+            e.Effects = _dropAccepted ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+            if (_dropAccepted)
+            {
+                _dropAccepted = false;
+                Dropped?.Invoke(e.Data);
+            }
+        };
+
         HitArea.PreviewMouseLeftButtonDown += OnDragArm;
         HitArea.PreviewMouseMove += OnDragMove;
         HitArea.PreviewMouseLeftButtonUp += OnDragRelease;
@@ -150,6 +166,28 @@ public partial class IslandWindow : Window
 
     /// <summary>The user picked the island up.</summary>
     public event Action? DragStarted;
+
+    /// <summary>Something from another app is dragged over the island. Return true to accept it.</summary>
+    public event Func<IDataObject, bool>? DropEntered;
+
+    /// <summary>The drag moved off the island (or a part of it; the controller waits a moment to be sure).</summary>
+    public event Action? DropLeft;
+
+    /// <summary>It was let go over the island.</summary>
+    public event Action<IDataObject>? Dropped;
+
+    private bool _dropAccepted;
+
+    private void OnDropDrag(DragEventArgs e, bool entering)
+    {
+        if (entering || !_dropAccepted)
+        {
+            _dropAccepted = DropEntered?.Invoke(e.Data) == true;
+        }
+
+        e.Effects = _dropAccepted ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
 
     /// <summary>
     /// The user dropped the island: the placement it landed on (a named spot when dropped close to one,
@@ -931,9 +969,9 @@ public partial class IslandWindow : Window
     {
         for (var node = source; node is not null; node = node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
         {
-            if (node is System.Windows.Controls.Primitives.ButtonBase)
+            if (node is System.Windows.Controls.Primitives.ButtonBase || Nexus.Modes.Controls.IslandInput.GetOwnsDrag(node))
             {
-                return true;
+                return true; // buttons keep their clicks; the shelf's items drag out instead
             }
         }
 

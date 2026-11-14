@@ -27,6 +27,7 @@ Design: [Nexus Figma file](https://www.figma.com/design/qYAkTFWMdY8sChyhQeVNjX/N
 | F3 Agent status for Claude Code (working, needs you, done, failed, several sessions) | ✅ |
 | F4 Music (any app that reports to Windows media controls), level bars in the service's colour | ✅ |
 | WhatsApp calls: ringing banner with decline and accept, call timer, mute, end, call ended, missed call | ✅ |
+| Shelf: drop photos, files, links or text on the island, drag them into any app within the hour | ✅ |
 | F6 Show/hide shortcut, hide for 1 h / until tomorrow, auto-hide over fullscreen apps | ✅ |
 | Tray menu, start with Windows | ✅ |
 | Cricket, Swatch, Calendar, system HUDs, settings UI, onboarding, installer | v1 (shown as disabled tiles in the launcher) |
@@ -121,6 +122,20 @@ All of it lives under `Positioning` in the settings file. A fuller example than 
 - `CompactHours` are times of day to stay compact. `DetectControls: false` turns UI Automation off and
   leaves only your rules.
 
+### The shelf
+
+Drag a photo from a web page, a file from Explorer, a link or some text over the island: it opens a
+drop zone. Let go, and the item stays on the island for an hour. Then drag it into any app: Figma,
+another site's upload box, a chat, a folder. Drag the pill to take everything at once, or click it to
+see each item and drag just one (hover a tile to remove it).
+
+- Web images are saved as real files (in `%LocalAppData%\Nexus\Shelf`), because browsers hand over a
+  dragged image as a "virtual file" or a link that other apps can't open later. Google Images thumbnails
+  (inline data) work too; for a plain image link Nexus downloads just that one image.
+- Files you drop from disk are kept as references, never copied, and never deleted.
+- Items survive a restart. Up to 20 are kept; change `"Shelf": { "KeepMinutes": 60, "MaxItems": 20 }` in
+  the settings file.
+
 ### WhatsApp calls
 
 A ringing call grows the island into a banner with the caller, **Decline** and **Accept**. It stays up
@@ -190,6 +205,11 @@ stand-in app instead of WhatsApp, for testing calls without touching real ones.
 - **Claude's colour.** Claude Code's working and "needs you" states (icon, edge, pulse, button) use Claude's
   coral. Done stays green and failed red, since those colours carry meaning. Other agents keep the accent
   and attention colours.
+- **The shelf takes what the dragging app offers.** Most browsers and Explorer work; an app that only
+  offers its own private format can't be kept. Dragging out adapts to the app under the pointer: apps built
+  on Chromium (Figma's desktop app, browsers, WhatsApp, Slack) get the file the way a browser hands over a
+  dragged image, because Figma's desktop app can't read a plain file path dropped from another app; every
+  other app (Explorer, Photoshop) gets the real file.
 - **WhatsApp calls depend on WhatsApp's interface.** Nexus looks for its English button names
   ("Accept", "Decline", "Mute microphone", "End call"); another language or a redesign may need new names
   in `CallReader`. A call ringing under 20 seconds and then stopping isn't counted as missed, because

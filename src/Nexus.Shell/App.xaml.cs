@@ -14,6 +14,7 @@ using Nexus.Modes.Agent;
 using Nexus.Modes.Call;
 using Nexus.Modes.Focus;
 using Nexus.Modes.Music;
+using Nexus.Modes.Shelf;
 using Nexus.Shell.Island;
 using Nexus.Shell.Native;
 using Nexus.Shell.Setup;
@@ -35,6 +36,7 @@ public partial class App : Application
     private AgentMode _agent = null!;
     private MusicMode _music = null!;
     private CallMode _call = null!;
+    private ShelfMode _shelf = null!;
     private CallWatcher? _calls;
     private HookSetupWindow? _setupWindow;
     private bool _hideShortcutAvailable;
@@ -78,6 +80,9 @@ public partial class App : Application
         _calls = new CallWatcher();
         _call = new CallMode(_calls.PerformAsync, _calls.ShowApp);
         _calls.Changed += _call.Update;
+        ShelfMode.DebugWrite = DebugLog.Write;
+        _shelf = new ShelfMode(_settings);
+        _shelf.Load();
         StartAgentServer();
 
         _window = new IslandWindow
@@ -92,7 +97,7 @@ public partial class App : Application
 
         _controller = new IslandController(
             _window,
-            [_focus, _agent, _call, _music],
+            [_focus, _agent, _call, _shelf, _music],
             _settings,
             Save,
             agentConnected: IsAgentConnected,
